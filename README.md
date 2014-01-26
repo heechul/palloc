@@ -2,7 +2,7 @@ PALLOC is a kernel-level memory allocator that exploits page-based virtual-to-ph
 
 Source code
 ============
-The source code is available in the following location:
+The source code is available in the following [location:](https://github.com/heechul/linux)
 
     repository: git@github.com:heechul/linux.git
     branch: palloc-3.6
