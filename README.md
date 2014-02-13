@@ -19,8 +19,21 @@ Usage
 =====
 
     # mount -t cgroup xxx /sys/fs/cgroup
+
+    < DRAM map setting for Non-XOR map systems>
     # echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
-      --> bank bits: 12, 13, 19, 20 (Non XOR mapping system)
+      --> bank bits: 12, 13, 19, 20
+
+    < DRAM map setting for XOR map systems > 
+    # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
+      --> select bit 13, 14, 15, 16
+    # echo xor 13 17 > /sys/kernel/debug/palloc/control
+    # echo xor 14 18 > /sys/kernel/debug/palloc/control
+    # echo xor 15 19 > /sys/kernel/debug/palloc/control
+    # echo xor 16 20 > /sys/kernel/debug/palloc/control
+    # echo 1 > /sys/kernel/debug/palloc/use_mc_xor
+      -->  bank bits: (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20).
+
     # mkdir /sys/fs/cgroup/part1
     # echo 0 /sys/fs/cgroup/part1/cpuset.cpus
     # echo 0 /sys/fs/cgroup/part1/cpuset.mems
