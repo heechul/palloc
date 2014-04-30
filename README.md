@@ -23,6 +23,8 @@ Usage
     < DRAM map setting for Non-XOR map systems>
     # echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
       --> bank bits: 12, 13, 19, 20
+    # echo 1 > /sys/kernel/debug/palloc/use_palloc
+      --> enable palloc (owise the default buddy allocator will be used)
 
     < DRAM map setting for XOR map systems > 
     # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
@@ -33,6 +35,7 @@ Usage
     # echo xor 16 20 > /sys/kernel/debug/palloc/control
     # echo 1 > /sys/kernel/debug/palloc/use_mc_xor
       -->  bank bits: (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20).
+
 
     # mkdir /sys/fs/cgroup/part1
     # echo 0 /sys/fs/cgroup/part1/cpuset.cpus
