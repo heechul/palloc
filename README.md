@@ -40,8 +40,8 @@ Usage
       --> enable palloc (owise the default buddy allocator will be used)
 
     # mkdir /sys/fs/cgroup/part1
-    # echo 0 /sys/fs/cgroup/part1/cpuset.cpus
-    # echo 0 /sys/fs/cgroup/part1/cpuset.mems
+    # echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
+    # echo 0 > /sys/fs/cgroup/part1/cpuset.mems
     # echo 0-3 > /sys/fs/cgroup/part1/palloc.bins
       --> DRAM bank 0,1,2,3 are assigned to part1 CGROUP.
     # echo $$ > /sys/fs/cgroup/part1/tasks
