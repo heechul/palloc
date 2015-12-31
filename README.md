@@ -32,8 +32,8 @@ See https://github.com/heechul/misc/blob/devel/README-map-detector.md
 
      	 # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
     	 # echo xor 13 17 > /sys/kernel/debug/palloc/control
-	 # echo xor 14 18 > /sys/kernel/debug/palloc/control
-    	 # echo xor 15 19 > /sys/kernel/debug/palloc/control
+         # echo xor 14 18 > /sys/kernel/debug/palloc/control
+         # echo xor 15 19 > /sys/kernel/debug/palloc/control
     	 # echo xor 16 20 > /sys/kernel/debug/palloc/control
     	 # echo 1 > /sys/kernel/debug/palloc/use_mc_xor
       
