@@ -31,27 +31,27 @@ See https://github.com/heechul/misc/blob/devel/README-map-detector.md
    - For XOR mapped address bits: e.g., (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20)
 
      	 # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
-    # echo xor 13 17 > /sys/kernel/debug/palloc/control
-    # echo xor 14 18 > /sys/kernel/debug/palloc/control
-    # echo xor 15 19 > /sys/kernel/debug/palloc/control
-    # echo xor 16 20 > /sys/kernel/debug/palloc/control
-    # echo 1 > /sys/kernel/debug/palloc/use_mc_xor
+    	 # echo xor 13 17 > /sys/kernel/debug/palloc/control
+	 # echo xor 14 18 > /sys/kernel/debug/palloc/control
+    	 # echo xor 15 19 > /sys/kernel/debug/palloc/control
+    	 # echo xor 16 20 > /sys/kernel/debug/palloc/control
+    	 # echo 1 > /sys/kernel/debug/palloc/use_mc_xor
       
    - CGROUP partition setting
 
-    # mount -t cgroup xxx /sys/fs/cgroup
-    # mkdir /sys/fs/cgroup/part1
-    # echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
-    # echo 0 > /sys/fs/cgroup/part1/cpuset.mems
-    # echo 0-3 > /sys/fs/cgroup/part1/palloc.bins
-      --> DRAM bank 0,1,2,3 are assigned to part1 CGROUP.
-    # echo $$ > /sys/fs/cgroup/part1/tasks
-     from now on, all processes invoked from the shell use pages from bank 0,1,2,3 only.
+     	 # mount -t cgroup xxx /sys/fs/cgroup
+    	 # mkdir /sys/fs/cgroup/part1
+    	 # echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
+    	 # echo 0 > /sys/fs/cgroup/part1/cpuset.mems
+    	 # echo 0-3 > /sys/fs/cgroup/part1/palloc.bins
+      	 --> DRAM bank 0,1,2,3 are assigned to part1 CGROUP.
+    	 # echo $$ > /sys/fs/cgroup/part1/tasks
+	 --> from now on, all processes invoked from the shell use pages from bank 0,1,2,3 only.
 
    - Enable PALLOC
 
-    # echo 1 > /sys/kernel/debug/palloc/use_palloc
-      --> enable palloc (owise the default buddy allocator will be used)
+       	 # echo 1 > /sys/kernel/debug/palloc/use_palloc
+      	 --> enable palloc (owise the default buddy allocator will be used)
 
 ## Papers
 
