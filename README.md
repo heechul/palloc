@@ -14,39 +14,44 @@ To build the kernel with PALLOC enabled, the following option must be enabled.
 
     CONFIG_CGROUP_PALLOC=y
 
-## Detecting DRAM mappings
+## Detecting DRAM bank bits
 
 See https://github.com/heechul/misc/blob/devel/README-map-detector.md
 
+* You can use PALLOC to partition the caches. 
+
 ## Usage
 
-    # mount -t cgroup xxx /sys/fs/cgroup
+1. Select physical adddress bits to be used for page coloring
 
-    < DRAM map setting for Non-XOR map systems>
+   - For normal address bits: e.g., bit 12, 13, 19, 20
+
     # echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
-      --> bank bits: 12, 13, 19, 20
 
-    < DRAM map setting for XOR map systems > 
+   - For XOR mapped address bits: e.g., (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20)
+
     # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
-      --> select bit 13, 14, 15, 16
     # echo xor 13 17 > /sys/kernel/debug/palloc/control
     # echo xor 14 18 > /sys/kernel/debug/palloc/control
     # echo xor 15 19 > /sys/kernel/debug/palloc/control
     # echo xor 16 20 > /sys/kernel/debug/palloc/control
     # echo 1 > /sys/kernel/debug/palloc/use_mc_xor
-      -->  bank bits: (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20).
+      
+   - CGROUP partition setting
 
-    < General >
-    # echo 1 > /sys/kernel/debug/palloc/use_palloc
-      --> enable palloc (owise the default buddy allocator will be used)
-
+    # mount -t cgroup xxx /sys/fs/cgroup
     # mkdir /sys/fs/cgroup/part1
     # echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
     # echo 0 > /sys/fs/cgroup/part1/cpuset.mems
     # echo 0-3 > /sys/fs/cgroup/part1/palloc.bins
       --> DRAM bank 0,1,2,3 are assigned to part1 CGROUP.
     # echo $$ > /sys/fs/cgroup/part1/tasks
-      --> from now on, all processes invoked from the shell use pages from bank 0,1,2,3 only.
+     from now on, all processes invoked from the shell use pages from bank 0,1,2,3 only.
+
+   - Enable PALLOC
+
+    # echo 1 > /sys/kernel/debug/palloc/use_palloc
+      --> enable palloc (owise the default buddy allocator will be used)
 
 ## Papers
 
