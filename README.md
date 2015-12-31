@@ -23,13 +23,11 @@ See https://github.com/heechul/misc/blob/devel/README-map-detector.md
 ## Usage
 
 1. Select physical adddress bits to be used for page coloring
-
    - For normal address bits: e.g., bit 12, 13, 19, 20
-
-   $ echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
-
    - For XOR mapped address bits: e.g., (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20)
 
+
+   $ echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
    $ echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
    $ echo xor 13 17 > /sys/kernel/debug/palloc/control
          # echo xor 14 18 > /sys/kernel/debug/palloc/control
