@@ -14,21 +14,22 @@ To build the kernel with PALLOC enabled, the following option must be enabled.
 
     CONFIG_CGROUP_PALLOC=y
 
-## Detecting DRAM bank bits
+## Detecting DRAM bank bits (for DRAM bank partitioning)
 
 See https://github.com/heechul/misc/blob/devel/README-map-detector.md
 
-* You can use PALLOC to partition the caches. 
+For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 
 ## Usage
 
 1. Select physical adddress bits to be used for page coloring
 
-   - For normal address bits: e.g., bit 12, 13, 19, 20
+   - For normal address bits
    ```
         # echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
+        --> select bit 12, 13, 19, 20. (total bins: 2^4 = 16)
    ```
-   - For XOR mapped address bits: e.g., (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20)
+   - For XOR mapped address bits: 
    ```
         # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
         # echo xor 13 17 > /sys/kernel/debug/palloc/control
@@ -36,6 +37,7 @@ See https://github.com/heechul/misc/blob/devel/README-map-detector.md
         # echo xor 15 19 > /sys/kernel/debug/palloc/control
     	# echo xor 16 20 > /sys/kernel/debug/palloc/control
     	# echo 1 > /sys/kernel/debug/palloc/use_mc_xor
+	--> select (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20) (total bins: 2^4 = 16)
    ```      
    - CGROUP partition setting
    ```
@@ -44,9 +46,9 @@ See https://github.com/heechul/misc/blob/devel/README-map-detector.md
     	# echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
     	# echo 0 > /sys/fs/cgroup/part1/cpuset.mems
     	# echo 0-3 > /sys/fs/cgroup/part1/palloc.bins
-      	--> DRAM bank 0,1,2,3 are assigned to part1 CGROUP.
+      	--> bin 0,1,2,3 are assigned to part1 CGROUP.
     	# echo $$ > /sys/fs/cgroup/part1/tasks
-        --> from now on, all processes invoked from the shell use pages from bank 0,1,2,3 only.
+        --> from now on, all processes invoked from the shell use pages from the bins 0,1,2,3 only.
    ```
    - Enable PALLOC
    ```
