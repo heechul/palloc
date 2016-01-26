@@ -57,7 +57,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
    ```
 2. Disable support for transparent huge pages from kernel:
 
-         # echo never > /sys/kernel/mm/transparent_hugepage/enabled
+        # echo never > /sys/kernel/mm/transparent_hugepage/enabled
    
 ## Papers
 
