@@ -16,7 +16,7 @@ To build the kernel with PALLOC enabled, the following option must be enabled.
 
 ## Detecting DRAM bank bits (for DRAM bank partitioning)
 
-See https://github.com/heechul/misc/blob/devel/README-map-detector.md
+See [README-map-detector.md](./blob/master/README-map-detector.md)
 
 For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 
