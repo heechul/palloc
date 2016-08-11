@@ -24,12 +24,12 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 
 1. Select physical adddress bits to be used for page coloring
 
-   - For normal address bits
+   - For normal address bits (e.g., Intel Nehalem)
    ```
         # echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
         --> select bit 12, 13, 19, 20. (total bins: 2^4 = 16)
    ```
-   - For XOR mapped address bits: 
+   - For XOR mapped address bits (e.g., Intel Haswell) 
    ```
         # echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
         # echo xor 13 17 > /sys/kernel/debug/palloc/control
@@ -61,4 +61,4 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
    
 ## Papers
 
-* Heechul Yun, Renato, Zheng-Pei Wu, Rodolfo Pellizzoni. "PALLOC: DRAM Bank-Aware Memory Allocator for Performance Isolation on Multicore Platforms," _IEEE Intl. Conference on Real-Time and Embedded Technology and Applications Symposium (RTAS)_, 2014. ([pdf](http://www.ittc.ku.edu/~heechul/papers/palloc-rtas2014.pdf))
+* Heechul Yun, Renato, Zheng-Pei Wu, Rodolfo Pellizzoni. "PALLOC: DRAM Bank-Aware Memory Allocator for Performance Isolation on Multicore Platforms," _IEEE Intl. Conference on Real-Time and Embedded Technology and Applications Symposium (RTAS)_, 2014. ([pdf](http://www.ittc.ku.edu/~heechul/papers/palloc-rtas2014.pdf), [ppt](http://www.slideshare.net/saiparan/palloc-rtas2014))
