@@ -55,10 +55,18 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
         # echo 1 > /sys/kernel/debug/palloc/use_palloc
       	 --> enable palloc (owise the default buddy allocator will be used)
    ```
+   - PALLOC options
+   ```
+   	# echo 2 > /sys/kernel/debug/palloc/debug_level  
+	 --> enable debug messsages visible through the tracebuffer (/sys/kernel/debug/tracing/trace). [Recommended]
+	# echo 4 > /sys/kernel/debug/palloc/alloc_balance
+	 --> wait until at least 4 different colors are in the color cache. [Recommended]
+	 
 2. Disable support for transparent huge pages from kernel:
 
         # echo never > /sys/kernel/mm/transparent_hugepage/enabled
-   
+         --> palloc doesn't work with transparent huge page. please disable this.
+	 
 ## Papers
 
 * Heechul Yun, Renato, Zheng-Pei Wu, Rodolfo Pellizzoni. "PALLOC: DRAM Bank-Aware Memory Allocator for Performance Isolation on Multicore Platforms," _IEEE Intl. Conference on Real-Time and Embedded Technology and Applications Symposium (RTAS)_, 2014. ([pdf](http://www.ittc.ku.edu/~heechul/papers/palloc-rtas2014.pdf), [ppt](http://www.slideshare.net/saiparan/palloc-rtas2014))
