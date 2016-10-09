@@ -139,7 +139,7 @@ index 5dba293..b5b0f09 100644
 +#ifdef CONFIG_CGROUP_PALLOC
 +#include <linux/palloc.h>
 +
-+int memdbg_enable = 0;
++int memdbg_enable = 1;
 +EXPORT_SYMBOL(memdbg_enable);
 +
 +static int sysctl_alloc_balance = 0;
