@@ -55,7 +55,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
         # echo 1 > /sys/kernel/debug/palloc/use_palloc
       	 --> enable palloc (owise the default buddy allocator will be used)
    ```
-   - PALLOC options
+   - Other options
    ```
    	# echo 2 > /sys/kernel/debug/palloc/debug_level  
 	 --> enable debug messsages visible through /sys/kernel/debug/tracing/trace. [Recommended]
