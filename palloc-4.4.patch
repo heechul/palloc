@@ -1,0 +1,1099 @@
+From 6ce1e48baba481b6b5f2ca42ffd2c07c1b4a5ddb Mon Sep 17 00:00:00 2001
+From: Yupeng Li <ypli15@lzu.edu.cn>
+Date: Fri, 21 Jul 2017 10:45:21 +0800
+Subject: [PATCH] palloc 4.4
+
+Signed-off-by: Yupeng Li <ypli15@lzu.edu.cn>
+---
+ include/linux/cgroup_subsys.h |   4 +
+ include/linux/mmzone.h        |  31 +++
+ include/linux/palloc.h        |  32 +++
+ init/Kconfig                  |  12 +
+ mm/Makefile                   |   1 +
+ mm/page_alloc.c               | 601 +++++++++++++++++++++++++++++++++++++++++-
+ mm/palloc.c                   | 201 ++++++++++++++
+ mm/vmstat.c                   |  51 ++++
+ 8 files changed, 930 insertions(+), 3 deletions(-)
+ create mode 100644 include/linux/palloc.h
+ create mode 100644 mm/palloc.c
+
+diff --git a/include/linux/cgroup_subsys.h b/include/linux/cgroup_subsys.h
+index 1a96fda..ce46b56 100644
+--- a/include/linux/cgroup_subsys.h
++++ b/include/linux/cgroup_subsys.h
+@@ -58,6 +58,10 @@ SUBSYS(net_prio)
+ SUBSYS(hugetlb)
+ #endif
+ 
++#if IS_ENABLED(CONFIG_CGROUP_PALLOC)
++SUBSYS(palloc)
++#endif
++
+ /*
+  * Subsystems that implement the can_fork() family of callbacks.
+  */
+diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
+index e23a9e7..a48078d 100644
+--- a/include/linux/mmzone.h
++++ b/include/linux/mmzone.h
+@@ -69,6 +69,30 @@ enum {
+ #  define is_migrate_cma(migratetype) false
+ #endif
+ 
++#ifdef CONFIG_CGROUP_PALLOC
++/* 
++ * Determine the number of bins according to the bits required for
++ * each component of the address
++ */
++#define MAX_PALLOC_BITS 8
++#define MAX_PALLOC_BINS (1 << MAX_PALLOC_BITS)
++#define COLOR_BITMAP(name) DECLARE_BITMAP(name, MAX_PALLOC_BINS)
++
++struct color_lists{
++    struct list_head palloc_cache_lists[MIGRATE_TYPES];
++    int stat_cnt[MIGRATE_TYPES];    
++};
++
++struct palloc_cache{
++    struct color_lists cls[MAX_PALLOC_BINS];
++    COLOR_BITMAP(cmap);
++};
++
++#define for_each_palloc_migratetype(migrate_idx)\
++            for(migrate_idx = 0; migrate_idx < MIGRATE_TYPES; migrate_idx++)
++
++#endif /* CONFIG_CGROUP_PALLOC */
++
+ #define for_each_migratetype_order(order, type) \
+ 	for (order = 0; order < MAX_ORDER; order++) \
+ 		for (type = 0; type < MIGRATE_TYPES; type++)
+@@ -477,6 +501,13 @@ struct zone {
+ 	ZONE_PADDING(_pad1_)
+ 	/* free areas of different sizes */
+ 	struct free_area	free_area[MAX_ORDER];
++    /*
++     * Interpretation that palloc cache information. for movable type free pages of order-0.
++     */
++    #ifdef CONFIG_CGROUP_PALLOC
++        struct palloc_cache zone_pc; 
++    #endif
++
+ 
+ 	/* zone flags, see below */
+ 	unsigned long		flags;
+diff --git a/include/linux/palloc.h b/include/linux/palloc.h
+new file mode 100644
+index 0000000..c041ea1
+--- /dev/null
++++ b/include/linux/palloc.h
+@@ -0,0 +1,32 @@
++#ifndef _LINUX_PALLOC_H
++#define _LINUX_PALLOC_H
++
++/*
++ * kernel/palloc.h
++ *
++ * PHysical memory aware allocator
++ */
++
++#include <linux/types.h>
++#include <linux/cgroup-defs.h>
++#include <linux/kernel.h>
++#include <linux/mm.h>
++
++#ifdef CONFIG_CGROUP_PALLOC
++
++struct palloc {
++	struct cgroup_subsys_state css;
++	COLOR_BITMAP(cmap);
++};
++
++/* Retrieve the palloc group corresponding to this cgroup container */
++struct palloc *cgroup_ph(struct cgroup *cgrp);
++
++/* Retrieve the palloc group corresponding to this subsys */
++struct palloc * ph_from_subsys(struct cgroup_subsys_state * subsys);
++
++/* return #of palloc bins */
++extern int palloc_bins(void);
++#endif /* CONFIG_CGROUP_PALLOC */
++
++#endif /* _LINUX_PALLOC_H */
+diff --git a/init/Kconfig b/init/Kconfig
+index 235c7a2..4e88a8f 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1151,6 +1151,18 @@ config CGROUP_WRITEBACK
+ 	depends on MEMCG && BLK_CGROUP
+ 	default y
+ 
++config CGROUP_PALLOC
++    bool "Enable PALLOC"
++    default n
++    ---help---
++        Enable PALLOC: physical address based page allocator that
++        replaces the buddy allocator
++
++config CGROUP_PALLOC_DEBUG_INFO
++    bool "printk debug information of PALLOC"
++    default n
++    depends on CGROUP_PALLOC
++
+ endif # CGROUPS
+ 
+ config CHECKPOINT_RESTORE
+diff --git a/mm/Makefile b/mm/Makefile
+index 2ed4319..c7be8c6 100644
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -81,3 +81,4 @@ obj-$(CONFIG_CMA_DEBUGFS) += cma_debug.o
+ obj-$(CONFIG_USERFAULTFD) += userfaultfd.o
+ obj-$(CONFIG_IDLE_PAGE_TRACKING) += page_idle.o
+ obj-$(CONFIG_FRAME_VECTOR) += frame_vector.o
++obj-$(CONFIG_CGROUP_PALLOC) += palloc.o
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 9d666df..15ae67d 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -62,12 +62,222 @@
+ #include <linux/sched/rt.h>
+ #include <linux/page_owner.h>
+ #include <linux/kthread.h>
++#include <linux/seq_file.h>
++#include <linux/dcache.h>
++#include <linux/gfp.h>
++
+ 
+ #include <asm/sections.h>
+ #include <asm/tlbflush.h>
+ #include <asm/div64.h>
++
+ #include "internal.h"
+ 
++
++#ifdef CONFIG_CGROUP_PALLOC
++#include <linux/palloc.h>
++#include <linux/debugfs.h>
++
++int memdbg_enable = 0;
++EXPORT_SYMBOL(memdbg_enable);
++
++static int sysctl_alloc_balance = 0;
++/* palloc address bitmask */
++
++static unsigned long sysctl_palloc_mask = 0x0;
++
++static int mc_xor_bits[64];
++static int use_mc_xor = 0;
++static int use_palloc = 0;
++
++DEFINE_PER_CPU(unsigned long, palloc_rand_seed);
++
++#define memdbg(lvl, fmt, ...)					\
++        do {                                                    \
++		if(memdbg_enable >= lvl)			\
++			trace_printk(fmt, ##__VA_ARGS__);       \
++        } while(0)
++
++struct palloc_stat {
++	s64 max_ns;
++	s64 min_ns;
++	s64 tot_ns;
++
++	s64 tot_cnt;
++	s64 iter_cnt;      /* avg_iter = iter_cnt/tot_cnt */
++
++	s64 cache_hit_cnt; /* hit rate = cache_hit_cnt / cache_acc_cnt */
++	s64 cache_acc_cnt;
++
++	s64 flush_cnt;
++
++	s64 alloc_balance;
++	s64 alloc_balance_timeout;
++	ktime_t start;     /* start time of the current iteration */
++};
++
++static struct {
++    u32 enabled;
++	int colors;
++	struct palloc_stat stat[3]; /* 0 - color, 1 - normal, 2 - fail */
++} palloc;
++
++static void palloc_flush(struct zone *zone);
++
++static ssize_t palloc_write(struct file *filp, const char __user *ubuf,
++				size_t cnt, loff_t *ppos)
++{
++    char buf[64];
++	int i;
++
++    if (cnt > 63) cnt = 63;
++    if (copy_from_user(&buf, ubuf, cnt))
++            return -EFAULT;
++
++	if (!strncmp(buf, "reset", 5)) {
++		printk(KERN_INFO "reset statistics...\n");
++		for (i = 0; i < ARRAY_SIZE(palloc.stat); i++) {
++			memset(&palloc.stat[i], 0, sizeof(struct palloc_stat));
++			palloc.stat[i].min_ns = 0x7fffffff;
++		}
++	} else if (!strncmp(buf, "flush", 5)) {
++		struct zone *zone;
++		printk(KERN_INFO "flush color cache...\n");
++		for_each_populated_zone(zone) {
++			unsigned long flags;
++			if (!zone)
++				continue;
++			spin_lock_irqsave(&zone->lock, flags);
++			palloc_flush(zone);
++			spin_unlock_irqrestore(&zone->lock, flags);
++		}
++	} else if (!strncmp(buf, "xor", 3)) {
++		int bit, xor_bit;
++		sscanf(buf + 4, "%d %d", &bit, &xor_bit);
++		if ((bit > 0 && bit < 64) &&
++		    (xor_bit > 0 && xor_bit < 64) &&
++		    bit != xor_bit)
++		{
++			mc_xor_bits[bit] = xor_bit;
++		}
++	}
++
++        *ppos += cnt;
++        return cnt;
++}
++
++static int palloc_show(struct seq_file *m, void *v)
++{
++	int i, tmp;
++	char *desc[] = { "Color", "Normal", "Fail" };
++	char *buf, *tmpp;
++    int len;
++    
++
++	for (i = 0; i < 3; i++) {
++		struct palloc_stat *stat = &palloc.stat[i];
++		seq_printf(m, "statistics %s:\n", desc[i]);
++		seq_printf(m, "  min(ns)/max(ns)/avg(ns)/tot_cnt: %lld %lld %lld %lld\n",
++			   stat->min_ns,
++			   stat->max_ns,
++			   (stat->tot_cnt) ? div64_u64(stat->tot_ns, stat->tot_cnt) : 0,
++			   stat->tot_cnt);
++		seq_printf(m, "  hit rate: %lld/%lld (%lld %%)\n",
++			   stat->cache_hit_cnt, stat->cache_acc_cnt,
++			   (stat->cache_acc_cnt) ?
++			   div64_u64(stat->cache_hit_cnt*100, stat->cache_acc_cnt) : 0);
++		seq_printf(m, "  avg iter: %lld (%lld/%lld)\n",
++			   (stat->tot_cnt) ?
++			   div64_u64(stat->iter_cnt, stat->tot_cnt) : 0,
++			   stat->iter_cnt, stat->tot_cnt);
++		seq_printf(m, "  flush cnt: %lld\n", stat->flush_cnt);
++
++		seq_printf(m, "  balance: %lld | fail: %lld\n",
++			   stat->alloc_balance, stat->alloc_balance_timeout);
++	}
++	seq_printf(m, "mask: 0x%lx\n", sysctl_palloc_mask);
++	tmp = bitmap_weight(&sysctl_palloc_mask, sizeof(unsigned long)*8);
++	seq_printf(m, "weight: %d  (bins: %d)\n", tmp, 1<<tmp);
++   
++    buf = (char *)__get_free_page(GFP_TEMPORARY|__GFP_ZERO); 
++    if(!buf)
++        return -ENOMEM;
++    tmpp = buf;
++    len = bitmap_print_to_pagebuf(false, tmpp, &sysctl_palloc_mask, sizeof(unsigned long)*8);
++    if(len == 0)
++    {
++        free_page((unsigned long)buf);
++        return -EFAULT;
++    }
++    *(tmpp+len) = '\0';
++
++	//bitmap_scnlistprintf(buf, 256, &sysctl_palloc_mask, sizeof(unsigned long)*8);
++	seq_printf(m, "bits: %s\n", buf);
++	seq_printf(m, "XOR bits: %s\n", (use_mc_xor) ? "enabled" : "disabled");
++	for (i = 0; i < 64; i++) {
++		if (mc_xor_bits[i] > 0)
++			seq_printf(m, "   %3d <-> %3d\n", i, mc_xor_bits[i]);
++	}
++
++	seq_printf(m, "Use PALLOC: %s\n", (use_palloc) ? "enabled" : "disabled");
++    free_page((unsigned long)buf);
++    return 0;
++}
++static int palloc_open(struct inode *inode, struct file *filp)
++{
++        return single_open(filp, palloc_show, NULL);
++}
++
++static const struct file_operations palloc_fops = {
++        .open           = palloc_open,
++        .write          = palloc_write,
++        .read           = seq_read,
++        .llseek         = seq_lseek,
++        .release        = single_release,
++};
++
++static int __init palloc_debugfs(void)
++{
++    umode_t mode = S_IFREG | S_IRUSR | S_IWUSR;
++    struct dentry *dir;
++	int i;
++
++    dir = debugfs_create_dir("palloc", NULL);
++
++	/* statistics initialization */
++	 for (i = 0; i < ARRAY_SIZE(palloc.stat); i++) {
++		memset(&palloc.stat[i], 0, sizeof(struct palloc_stat));
++		palloc.stat[i].min_ns = 0x7fffffff;
++	}
++
++        if (!dir)
++                return PTR_ERR(dir);
++        if (!debugfs_create_file("control", mode, dir, NULL, &palloc_fops))
++                goto fail;
++	    if (!debugfs_create_u64("palloc_mask", mode, dir, (u64 *)&sysctl_palloc_mask))
++		        goto fail;
++        if (!debugfs_create_u32("use_mc_xor", mode, dir, &use_mc_xor))
++                goto fail;
++        if (!debugfs_create_u32("use_palloc", mode, dir, &use_palloc))
++                goto fail;
++        if (!debugfs_create_u32("debug_level", mode, dir, &memdbg_enable))
++                goto fail;
++	if (!debugfs_create_u32("alloc_balance", mode, dir, &sysctl_alloc_balance))
++		goto fail;
++        return 0;
++fail:
++        debugfs_remove_recursive(dir);
++        return -ENOMEM;
++}
++
++late_initcall(palloc_debugfs);
++
++
++#endif
++
++
++
++
+ /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
+ static DEFINE_MUTEX(pcp_batch_high_lock);
+ #define MIN_PERCPU_PAGELIST_FRACTION	(8)
+@@ -1402,10 +1612,364 @@ static int prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_CGROUP_PALLOC
++int palloc_bins(void)
++{
++    return min((1 << bitmap_weight(&sysctl_palloc_mask, 8*sizeof (unsigned long))),
++		   MAX_PALLOC_BINS);
++}
++EXPORT_SYMBOL_GPL(palloc_bins);
++
++static inline int page_to_color(struct page *page)
++{
++	int color = 0;
++	int idx = 0;
++	int c;
++	unsigned long paddr = page_to_phys(page);
++	for_each_set_bit(c, &sysctl_palloc_mask, sizeof(unsigned long) * 8) {
++		if (use_mc_xor) {
++			if (((paddr >> c) & 0x1) ^ ((paddr >> mc_xor_bits[c]) & 0x1))
++				color |= (1<<idx);
++		} else {
++			if ((paddr >> c) & 0x1)
++				color |= (1<<idx);
++		}
++		idx++;
++	}
++	return color;
++}
++
++/* debug */
++static inline unsigned long list_count(struct list_head *head)
++{
++	unsigned long n = 0;
++	struct list_head *curr;
++	list_for_each(curr, head)
++		n++;
++	return n;
++}
++
++/* 
++ * move all color_list pages into free_area[0].freelist[2]
++ * zone->lock must be hold before calling this function
++ */
++void palloc_flush(struct zone *zone)
++{
++	int c, migrate_idx, bins;
++	struct page *page;
++    struct palloc_cache *pc;
++    struct color_lists *pc_cl;
++    struct list_head *pos, *tmp;
++    unsigned long flags;
++
++	memdbg(2, "flush the ccache for zone %s\n", zone->name);
++
++    pc = &zone->zone_pc;
++	while (1) {
++        bins = palloc_bins();
++        for(c = 0; c < bins; c++){
++            pc_cl = &pc->cls[c];
++    
++            /* move all pages in current bank to buddy subsystem */
++            for_each_palloc_migratetype(migrate_idx){    
++				list_for_each_safe(pos, tmp, &pc_cl->palloc_cache_lists[migrate_idx]){ 
++                    page = list_entry(pos, struct page, lru);
++				    list_del_init(&page->lru);
++				    __free_one_page(page, page_to_pfn(page), zone, 0, migrate_idx);
++				    zone->free_area[0].nr_free--;
++			    }
++            }
++			
++            bitmap_clear(pc->cmap, c, 1);
++            for_each_palloc_migratetype(migrate_idx)
++			    INIT_LIST_HEAD(&pc_cl->palloc_cache_lists[migrate_idx]);
++		}
++
++		if (bitmap_weight(pc->cmap, MAX_PALLOC_BINS) == 0)
++			break;
++	}
++}
++EXPORT_SYMBOL(palloc_flush);
++
++
++/* move a page (size=1<<order) into a order-0 colored cache */
++static void palloc_insert(struct zone *zone, struct page *page, int order, int migratetype)
++{
++	int i, color;
++    struct palloc_cache *pc;
++
++	/* 1 page (2^order) -> 2^order x pages of colored cache. */
++	/* remove from zone->free_area[order].free_list[mt] */
++	list_del(&page->lru);
++	zone->free_area[order].nr_free--;
++    rmv_page_order(page);
++
++	/* insert pages to zone->zone_pc->cls->palloc_cache_lists[migratetype] (all order-0) */
++    pc = &zone->zone_pc;
++	for (i = 0; i < (1<<order); i++) {
++        struct color_lists *pc_cl;
++
++        /* the page belongs to which bank */
++		color = page_to_color(&page[i]);
++
++		memdbg(5, "- add pfn %ld (0x%08llx) to color_list[%d]\n",
++		       page_to_pfn(&page[i]), (u64)page_to_phys(&page[i]), color);
++		INIT_LIST_HEAD(&page[i].lru);
++        pc_cl = &pc->cls[color];
++		list_add_tail(&page[i].lru, &pc_cl->palloc_cache_lists[migratetype]);
++		bitmap_set(pc->cmap, color, 1);
++		zone->free_area[0].nr_free++;
++	}
++	memdbg(4, "add order=%d zone=%s\n", order, zone->name);
++}
++
++/* return a colored page (order-0) and remove it from the colored cache */
++static inline struct page *palloc_find_cmap(struct zone *zone, COLOR_BITMAP(cmap),
++				     int order,
++				     struct palloc_stat *stat, int migratetype)
++{
++	struct page *page;
++	COLOR_BITMAP(tmpmask);
++	int c;
++	unsigned int tmp_idx;
++	int found_w, want_w;
++	unsigned long rand_seed;
++    struct palloc_cache *pc;
++    struct color_lists *pc_cl;
++    int migrate_idx;
++	/* cache statistics */
++	if (stat) stat->cache_acc_cnt++;
++
++
++	/* find color cache entry */
++    pc = &zone->zone_pc;
++    if (!bitmap_intersects(pc->cmap, cmap, MAX_PALLOC_BINS))
++		return NULL;
++    
++	bitmap_and(tmpmask, pc->cmap, cmap, MAX_PALLOC_BINS);
++
++	/* must have a balance. */
++	found_w = bitmap_weight(tmpmask, MAX_PALLOC_BINS);
++	want_w  = bitmap_weight(cmap, MAX_PALLOC_BINS);
++	if (sysctl_alloc_balance &&
++	    found_w < want_w &&
++	    found_w < min(sysctl_alloc_balance, want_w) &&
++	    memdbg_enable)
++	{
++		ktime_t dur = ktime_sub(ktime_get(), stat->start);
++		if (dur.tv64 < 1000000) {
++			/* try to balance unless order=MAX-2 or 1ms has passed */
++			memdbg(4, "found_w=%d want_w=%d order=%d elapsed=%lld ns\n",
++			       found_w, want_w, order, dur.tv64);
++			stat->alloc_balance++;
++
++			return NULL;
++		}
++		stat->alloc_balance_timeout++;
++	}
++
++	/* choose a bit among the candidates */
++	if (sysctl_alloc_balance && memdbg_enable) {
++		rand_seed = (unsigned long)stat->start.tv64;
++	} else {
++		rand_seed = per_cpu(palloc_rand_seed, smp_processor_id())++;
++		if (rand_seed > MAX_PALLOC_BINS)
++			per_cpu(palloc_rand_seed, smp_processor_id()) = 0;
++	}
++
++	tmp_idx = rand_seed % found_w;
++	for_each_set_bit(c, tmpmask, MAX_PALLOC_BINS) {
++		if (tmp_idx-- <= 0)
++			break;
++	}
++
++    
++	BUG_ON(c >= MAX_PALLOC_BINS);
++    
++    /* whether corresponding list is empty or not */
++    pc_cl = &pc->cls[c];
++    if(list_empty(&pc_cl->palloc_cache_lists[migratetype]))
++            return NULL;
++
++	page = list_entry(pc_cl->palloc_cache_lists[migratetype].next, struct page, lru);
++
++#ifdef CONFIG_CGROUP_PALLOC_DEBUG_INFO
++    printk(KERN_INFO "PID :%d, in palloc_find_cmap, page at physical address : 0x%llx\n", 
++           current->pid, page_to_phys(page));
++#endif    
++	memdbg(1, "Found colored page pfn %ld color %d seed %ld found/want %d/%d\n",
++	       page_to_pfn(page), c, rand_seed, found_w, want_w);
++
++	/* remove from the zone->zone_pc->cls->palloc_color_lists[migratetype] */
++	list_del(&page->lru);
++   
++    /* check whether there are free pages or not in current bank cache*/
++    for_each_palloc_migratetype(migrate_idx)
++        if(!list_empty(&pc_cl->palloc_cache_lists[migrate_idx]))
++            goto out;
++	bitmap_clear(pc->cmap, c, 1);
++    
++out:
++    zone->free_area[0].nr_free--;
++
++	memdbg(5, "for migratetype(%d)- del pfn %ld from color_lists[%d]\n",
++	       migratetype, page_to_pfn(page), c);
++
++	if (stat) stat->cache_hit_cnt++;
++	return page;
++}
++
++static inline void
++update_stat(struct palloc_stat *stat, struct page *page, int iters)
++{
++	ktime_t dur;
++
++	if (memdbg_enable == 0)
++		return;
++
++	dur = ktime_sub(ktime_get(), stat->start);
++
++	if(dur.tv64 > 0) {
++		stat->min_ns = min(dur.tv64, stat->min_ns);
++		stat->max_ns = max(dur.tv64, stat->max_ns);
++
++		stat->tot_ns += dur.tv64;
++		stat->iter_cnt += iters;
++
++		stat->tot_cnt++;
++
++		memdbg(2, "order %u pfn %lu(0x%08llx) color %d iters %d in %lld ns\n",
++		       page_order(page), page_to_pfn(page), (u64)page_to_phys(page),
++		       (int)page_to_color(page),
++		       iters, dur.tv64);
++	} else {
++		memdbg(5, "dur %lld is < 0\n", dur.tv64);
++	}
++}
++
++/*
++ * Go through the free lists for the given migratetype and remove
++ * the smallest available page from the freelists
++ */
++static inline
++struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
++				int migratetype)
++{
++	unsigned int current_order;
++	struct free_area *area;
++	struct list_head *curr, *tmp;
++	struct page *page;
++
++	struct palloc *ph;
++	struct palloc_stat *c_stat = &palloc.stat[0];
++	struct palloc_stat *n_stat = &palloc.stat[1];
++	struct palloc_stat *f_stat = &palloc.stat[2];
++	int iters = 0;
++	COLOR_BITMAP(tmpcmap);
++	unsigned long *cmap;
++
++	if (memdbg_enable)
++		c_stat->start = n_stat->start = f_stat->start = ktime_get();
++
++	if (!use_palloc)
++		goto normal_buddy_alloc;
++
++    /* try not to split the high-order pageblock */ 
++    if (migratetype == MIGRATE_HIGHATOMIC)
++        goto normal_buddy_alloc;
++
++	/* get current task's cgroup information */
++	ph = ph_from_subsys(current->cgroups->subsys[palloc_cgrp_id]);
++    
++    if (ph && bitmap_weight(ph->cmap, MAX_PALLOC_BINS) > 0)
++		cmap = ph->cmap;
++	else {
++		bitmap_fill(tmpcmap, MAX_PALLOC_BINS);
++		cmap = tmpcmap;
++	}
++
++#ifdef CONFIG_CGROUP_PALLOC_DEBUG_INFO
++    printk(KERN_INFO "PID %d in __rmqueue_smallest, camp : Ox%lx\n", current->pid, *cmap);
++#endif
++	page = NULL;
++	if (order == 0) {
++		/* find in the cache */
++		memdbg(5, "check color cache (mt=%d)\n", migratetype);
++		page = palloc_find_cmap(zone, cmap, 0, c_stat, migratetype);
++
++		if (page) {
++			update_stat(c_stat, page, iters);
++			return page;
++		}
++	}
++
++	if (order == 0) {
++		/* build color cache */
++		iters++;
++	
++		for (current_order = 0;
++		     current_order < MAX_ORDER; ++current_order)
++		{
++			area = &(zone->free_area[current_order]);
++			if (list_empty(&area->free_list[migratetype]))
++				continue;
++			memdbg(3, " order=%d (nr_free=%ld)\n",
++			       current_order, area->nr_free);
++
++			list_for_each_safe(curr, tmp,
++					   &area->free_list[migratetype])
++			{
++				iters++;
++				page = list_entry(curr, struct page, lru);
++				palloc_insert(zone, page, current_order, migratetype);
++				page = palloc_find_cmap(zone, cmap, current_order, c_stat, migratetype);
++				if (page) {
++					update_stat(c_stat, page, iters);
++					memdbg(1, "Found at Zone %s pfn 0x%lx\n",
++					       zone->name,
++					       page_to_pfn(page));
++					return page;
++				}
++			}
++		}
++		memdbg(1, "Failed to find a matching color\n");
++	} else {
++	normal_buddy_alloc:
++		/* normal buddy */
++		/* Find a page of the appropriate size in the preferred list */
++		for (current_order = order;
++		     current_order < MAX_ORDER; ++current_order)
++		{
++			area = &(zone->free_area[current_order]);
++			iters++;
++			if (list_empty(&area->free_list[migratetype]))
++				continue;
++			page = list_entry(area->free_list[migratetype].next,
++					  struct page, lru);
++
++			list_del(&page->lru);
++			rmv_page_order(page);
++			area->nr_free--;
++			expand(zone, page, order,
++			       current_order, area, migratetype);
++
++			update_stat(n_stat, page, iters);
++			return page;
++		}
++	}
++	/* no memory (color or normal) found in this zone */
++	memdbg(1, "No memory in Zone %s: order %d mt %d\n",
++	       zone->name, order, migratetype);
++
++	return NULL;
++}
++#else /* !CONFIG_CGROUP_PALLOC */
++
+ /*
+  * Go through the free lists for the given migratetype and remove
+  * the smallest available page from the freelists
+  */
++
+ static inline
+ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+ 						int migratetype)
+@@ -1426,12 +1990,15 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+ 		rmv_page_order(page);
+ 		area->nr_free--;
+ 		expand(zone, page, order, current_order, area, migratetype);
+-		set_pcppage_migratetype(page, migratetype);
+ 		return page;
+ 	}
+ 
+ 	return NULL;
+ }
++#endif /* CONFIG_CGROUP_PALLOC */
++
++
++
+ 
+ 
+ /*
+@@ -2195,8 +2762,11 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
+ 	unsigned long flags;
+ 	struct page *page;
+ 	bool cold = ((gfp_flags & __GFP_COLD) != 0);
++    struct palloc *ph;
+ 
+-	if (likely(order == 0)) {
++    ph = ph_from_subsys(current->cgroups->subsys[palloc_cgrp_id]);
++    
++	if (likely(order == 0)&&!ph) {
+ 		struct per_cpu_pages *pcp;
+ 		struct list_head *list;
+ 
+@@ -4744,6 +5314,27 @@ static __meminit void zone_pcp_init(struct zone *zone)
+ 					 zone_batchsize(zone));
+ }
+ 
++#ifdef CONFIG_CGROUP_PALLOC
++/*  initialize the palloc cache lists */
++void __meminit zone_init_palloc_cache(struct zone *zone)
++{
++    int bankidx, mtidx;
++    struct palloc_cache *pc = &zone->zone_pc;
++    
++    for(bankidx = 0; bankidx < MAX_PALLOC_BINS; bankidx++){
++        struct color_lists *cl;
++    
++        cl = &pc->cls[bankidx];
++        for_each_palloc_migratetype(mtidx) {
++            INIT_LIST_HEAD(cl->palloc_cache_lists+mtidx);
++            cl->stat_cnt[mtidx] = 0;
++        }
++    }
++        
++    bitmap_zero(pc->cmap, MAX_PALLOC_BINS);
++}
++#endif
++
+ int __meminit init_currently_empty_zone(struct zone *zone,
+ 					unsigned long zone_start_pfn,
+ 					unsigned long size)
+@@ -4763,7 +5354,11 @@ int __meminit init_currently_empty_zone(struct zone *zone,
+ 			(unsigned long)zone_idx(zone),
+ 			zone_start_pfn, (zone_start_pfn + size));
+ 
+-	zone_init_free_lists(zone);
++#ifdef CONFIG_CGROUP_PALLOC
++    zone_init_palloc_cache(zone);
++#endif
++
++    zone_init_free_lists(zone);
+ 
+ 	return 0;
+ }
+diff --git a/mm/palloc.c b/mm/palloc.c
+new file mode 100644
+index 0000000..5dd57a6
+--- /dev/null
++++ b/mm/palloc.c
+@@ -0,0 +1,201 @@
++/*
++ * kernel/palloc.c
++ *
++ * Physical driven User Space Allocator info for a set of tasks.
++ */
++
++#include <linux/types.h>
++#include <linux/cgroup-defs.h>
++#include <linux/cgroup.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/palloc.h>
++#include <linux/mm.h>
++#include <linux/err.h>
++#include <linux/fs.h>
++#include <linux/bitmap.h>
++#include <linux/module.h>
++#include <linux/cgroup-defs.h>
++#include <linux/kernfs.h>
++#include <linux/bitops.h>
++#include <linux/mmzone.h>
++#include <linux/gfp.h>
++
++
++/*
++ * Check if a page is compliant to the policy defined for the given vma
++ */
++#ifdef CONFIG_CGROUP_PALLOC
++
++#define MAX_LINE_LEN (6*128)
++/*
++ * Types of files in a palloc group
++ * FILE_PALLOC - contain list of palloc bins allowed
++*/
++typedef enum {
++	FILE_PALLOC,
++} palloc_filetype_t;
++
++/*
++ * Top level palloc - mask initialized to zero implying no restriction on
++ * physical pages
++*/
++
++static struct palloc top_palloc;
++
++/* Retrieve the palloc group corresponding to this cgroup container */
++struct palloc *cgroup_ph(struct cgroup *cgrp)
++{
++	return container_of(cgrp->subsys[palloc_cgrp_id],
++			    struct palloc, css);
++}
++EXPORT_SYMBOL(cgroup_ph);
++
++struct palloc *ph_from_subsys(struct cgroup_subsys_state * subsys)
++{
++	return container_of(subsys, struct palloc, css);
++}
++EXPORT_SYMBOL(ph_from_subsys);
++/*
++ * Common write function for files in palloc cgroup
++ */
++
++static int update_bitmask(unsigned long *bitmap, const char *buf, int maxbits)
++{
++	int retval = 0;
++
++	if (!*buf)
++		bitmap_clear(bitmap, 0, maxbits);
++	else
++		retval = bitmap_parselist(buf, bitmap, maxbits);
++
++	return retval;
++}
++
++static ssize_t palloc_file_write(struct kernfs_open_file *op, char *buffer, size_t nbytes, loff_t off)
++{
++	int retval = 0;
++    struct cgroup_subsys_state *palloc_css = of_css(op);
++    struct palloc *ph = ph_from_subsys(palloc_css);
++    struct cftype *palloc_cft = of_cft(op);
++   
++    
++	switch (palloc_cft->private) {
++	case FILE_PALLOC:
++		retval = update_bitmask(ph->cmap, buffer, palloc_bins());
++        printk(KERN_INFO "palloc_bins() : %d\n", palloc_bins());
++        printk(KERN_INFO "ph->cmap : %lu\n", ph->cmap[0]);
++        printk(KERN_INFO "Write Bins : %s buffer len %ld \n", buffer, (long)strlen(buffer));
++		break;
++	default:
++		retval = -EINVAL;
++		break;
++	}
++
++    return retval ? : nbytes;
++}
++
++static int palloc_file_read(struct seq_file *sf, void *v)
++{
++	struct cgroup_subsys_state *css = seq_css(sf);
++	struct cftype *cft = seq_cft(sf);
++    struct palloc *ph = ph_from_subsys(css);
++    int len_buf = 0; 
++    char *page = NULL;
++    char *s = NULL;
++
++    page = (char *)__get_free_page(GFP_TEMPORARY|__GFP_ZERO);
++	if (!page)
++	    return -ENOMEM;
++
++	s = page;
++
++	switch (cft->private) {
++	case FILE_PALLOC:
++	    len_buf = bitmap_print_to_pagebuf(true, s, ph->cmap, palloc_bins());
++        if(len_buf == 0)
++        {
++            printk(KERN_INFO "bitmap_print_to_pagebuf return error!\n");
++            free_page((unsigned long)page);
++            return -EFAULT;
++        }
++        *(s+len_buf) = '\0';
++        printk(KERN_INFO "READ Bins : %s", page);
++		break;
++	default:
++        free_page((unsigned long)page);
++		return -EINVAL;	
++	}
++
++	seq_printf(sf, "%s", page);
++	free_page((unsigned long)page);
++
++	return 0;
++}
++
++/*
++ssize_t palloc_file_write(struct kernfs_open_file *op, char *buffer, size_t nbytes, loff_t off)
++{
++    printk(KERN_INFO "in the orginal palloc_file_write");
++    return nbytes;
++}
++
++int palloc_file_read(struct seq_file *sf, void *v)
++{
++    printk(KERN_INFO "in the orginal palloc_file_read");
++    return 0;
++}
++*/
++
++/*
++ * struct cftype: handler definitions for cgroup control files
++ *
++ * for the common functions, 'private' gives the type of the file
++ */
++static struct cftype files[] = {
++	{
++		.name = "bins",
++		.seq_show = palloc_file_read,
++		.write = palloc_file_write,
++		.max_write_len = MAX_LINE_LEN,
++		.private = FILE_PALLOC,
++	},
++	{ }	/* terminate */
++};
++
++/*
++ * palloc_create - create a palloc group
++ */
++static struct cgroup_subsys_state *palloc_create(struct cgroup_subsys_state *css)
++{
++	struct palloc *ph_child;
++
++    
++    ph_child = kzalloc(sizeof(*ph_child), GFP_KERNEL);
++	if(!ph_child)
++		return ERR_PTR(-ENOMEM);
++	bitmap_clear(ph_child->cmap, 0, MAX_PALLOC_BINS);
++
++    return &ph_child->css;
++}
++
++
++/*
++ * Destroy an existing palloc group
++ */
++static void palloc_destroy(struct cgroup_subsys_state *css)
++{
++	//struct palloc *ph = container_of(css, struct palloc, css);
++    struct palloc *ph = ph_from_subsys(css);
++	kfree(ph);
++}
++
++struct cgroup_subsys palloc_cgrp_subsys = {
++	.name = "palloc",
++	.css_alloc = palloc_create,
++	.css_free = palloc_destroy,
++	.id = palloc_cgrp_id,
++    .legacy_cftypes = files,
++};
++
++#endif /* CONFIG_CGROUP_PALLOC */
+diff --git a/mm/vmstat.c b/mm/vmstat.c
+index c54fd29..216aecc 100644
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -28,6 +28,10 @@
+ #include <linux/page_ext.h>
+ #include <linux/page_owner.h>
+ 
++#ifdef CONFIG_CGROUP_PALLOC
++#include <linux/palloc.h>
++#endif
++
+ #include "internal.h"
+ 
+ #ifdef CONFIG_VM_EVENT_COUNTERS
+@@ -937,10 +941,57 @@ static void frag_show_print(struct seq_file *m, pg_data_t *pgdat,
+ {
+ 	int order;
+ 
++    #ifdef CONFIG_CGROUP_PALLOC
++	int color, mt, cnt, bins, mtidx, sum;
++	struct free_area *area;
++	struct list_head *curr;
++    struct palloc_cache *pcpos;
++
+ 	seq_printf(m, "Node %d, zone %8s ", pgdat->node_id, zone->name);
+ 	for (order = 0; order < MAX_ORDER; ++order)
+ 		seq_printf(m, "%6lu ", zone->free_area[order].nr_free);
+ 	seq_putc(m, '\n');
++	
++    seq_printf(m, "--------\n");
++	/* Order by memory type */
++	for (mt = 0; mt < MIGRATE_TYPES; mt++) {
++		seq_printf(m, "-%17s[%d]", "mt", mt);
++		for (order = 0; order < MAX_ORDER; order++) {
++			area = &(zone->free_area[order]);
++			cnt  = 0;
++
++			list_for_each(curr, &area->free_list[mt])
++				cnt++;
++
++			seq_printf(m, "%6d ", cnt);
++		}
++
++		seq_printf(m, "\n");
++	}
++
++	/* Order by color */
++	seq_printf(m, "--------\n");
++    bins = palloc_bins();
++    pcpos = &zone->zone_pc;
++
++    for(color = 0; color < bins; color++) {
++        struct color_lists *clpos;
++
++		seq_printf(m, "- color [%d:%0x]", color, color);
++        sum = 0;
++
++        clpos = pcpos->cls+color;
++        for_each_palloc_migratetype(mtidx)  {
++		    cnt = 0;
++            list_for_each(curr, &clpos->palloc_cache_lists[mtidx])
++                cnt++;
++            
++            clpos->stat_cnt[mtidx] = cnt;
++            sum += cnt;
++        }
++		seq_printf(m, "%6d\n", sum);
++	}
++#endif /* CONFIG_CGROUP_PALLOC */
+ }
+ 
+ /*
+-- 
+2.7.4
+
