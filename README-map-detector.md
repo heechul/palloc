@@ -129,6 +129,9 @@ number means that the two bits are XOR paired.
 Hence, we can conclude the final mappings, which select DRAM banks, are
 (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20). 
 
+A set of successfully identified address map information can be found in the following wiki page. 
+
+https://github.com/heechul/palloc/wiki/Address-map-database
 
 References
 ==========
