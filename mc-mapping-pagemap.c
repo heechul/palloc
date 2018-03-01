@@ -31,6 +31,7 @@
 #include <sys/resource.h>
 #include <assert.h>
 #include <sys/sysinfo.h>
+#include <inttypes.h>
 
 /**************************************************************************
  * Public Definitions
@@ -112,9 +113,10 @@ size_t frameNumberFromPagemap(size_t value) {
 
 // ----------------------------------------------
 ulong  getPhysicalAddr(ulong virtual_addr) {
-	ulong value;
+	u_int64_t value;
 	off_t offset = (virtual_addr / 4096) * sizeof(value);
-	int got = pread(g_pagemap_fd, &value, sizeof(value), offset);
+	int got = pread(g_pagemap_fd, &value, 8, offset);
+	//printf("vaddr=%lu, value=0x%llx, got=%d\n", virtual_addr, value, got);
 	assert(got == 8);
 
 	// Check the "page present" flag.
@@ -192,7 +194,7 @@ int main(int argc, char* argv[])
 
 	int opt;
 
-	int repeat = 10000;
+	int repeat = 1000;
 
 	int page_shift = 0;
 	int xor_page_shift = 0;
