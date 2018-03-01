@@ -217,7 +217,7 @@ int main(int argc, char* argv[])
 	int opt;
 	int repeat = 1000000;
 	
-	pthread_t tid[4]; /* thread identifier */
+	pthread_t tid[16]; /* thread identifier */
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	num_processors = sysconf(_SC_NPROCESSORS_CONF);
@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
 
 	/* launch corun worker threads */
 	tid[0]= pthread_self();
-	long *corun_list[4];
+	long *corun_list[16];
 
 	/* thread affinity set */
 	for (int i = 0; i < MIN(1+n_corun, num_processors); i++) {
