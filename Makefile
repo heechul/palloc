@@ -1,7 +1,7 @@
 CC=gcc
 PGMS=mc-mapping mc-mapping-pagemap
 
-CFLAGS=-Wall -O2
+CFLAGS=-Wall -O2 -std=c11
 
 all: $(PGMS)
 

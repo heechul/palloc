@@ -163,10 +163,10 @@ long *create_list(ulong match_mask, int max_shift, int min_count)
 	
 	for (int i = 0; i < g_mem_size; i += 0x1000) {
 		vaddr = (ulong)(g_mapping + i) + (match_mask & 0xFFF);
-		if (*(ulong *)vaddr > 0)
-			continue;
 		paddr = getPhysicalAddr(vaddr);
 		if (!((paddr & ((1<<max_shift) - 1)) ^ match_mask)) {
+			if (*(ulong *)vaddr > 0)
+				continue;
 			/* found a match */
 			// printf("vaddr-paddr: %p-%p\n", (void *)vaddr, (void *)paddr);
 			count ++;
