@@ -38,7 +38,7 @@
 /**************************************************************************
  * Public Definitions
  **************************************************************************/
-#define ENTRY_SHIFT   (24)                  // [27:23] bits are used for iterations
+#define MAX_BIT   (24)                  // [27:23] bits are used for iterations
 #define CACHE_LINE_SIZE 64
 
 #define MAX(a,b) ((a>b)?(a):(b))
@@ -185,7 +185,7 @@ long *create_list(ulong match_mask, int max_shift, int min_count)
 			}
 		}
 	}
-	printf("failed to find matching pages\n");
+	printf("failed: found (%d) / requested (%d) pages\n", count, min_count);
 	return NULL;
 }
 
@@ -258,12 +258,14 @@ int main(int argc, char* argv[])
 
 	/* launch corun worker threads */
 	tid[0]= pthread_self();
-	long *corun_list = create_list(0x0, ENTRY_SHIFT, g_cache_num_ways*2);
+	long *corun_list[4];
 
 	/* thread affinity set */
 	for (int i = 0; i < MIN(1+n_corun, num_processors); i++) {
-		if (i != 0)
-			pthread_create(&tid[i], &attr, (void *)worker, corun_list);
+		if (i != 0) {
+			corun_list[i] = create_list(0x0, MAX_BIT, g_cache_num_ways*2);
+			pthread_create(&tid[i], &attr, (void *)worker, corun_list[i]);
+		}
 		CPU_ZERO(&cmask);
 		CPU_SET((g_cpuid + i) % num_processors, &cmask);
 		if (pthread_setaffinity_np(tid[i], sizeof(cpu_set_t), &cmask) < 0)
@@ -276,7 +278,7 @@ int main(int argc, char* argv[])
 		/* initialize data */
 		ulong bank_mask = (1<<bit);
 		long *subject_list =
-			create_list(bank_mask, ENTRY_SHIFT, g_cache_num_ways*2);
+			create_list(bank_mask, MAX_BIT, g_cache_num_ways*2);
 
 		/* subject measurement */
 		struct timespec start, end;
