@@ -249,13 +249,14 @@ int main(int argc, char* argv[])
 	
 	initPagemap();
 	setupMapping();
-	
+
+#if 0
 	/* try to use a real-time scheduler*/
-	param.sched_priority = 10;
+	param.sched_priority = 1;
 	if(sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
 		perror("sched_setscheduler failed");
 	}
-
+#endif
 	/* launch corun worker threads */
 	tid[0]= pthread_self();
 	long *corun_list[16];
