@@ -220,7 +220,6 @@ void  worker(void *param)
 
 int main(int argc, char* argv[])
 {
-	struct sched_param param;
         cpu_set_t cmask;
 	int num_processors, n_corun = 1;
 	int opt;
@@ -260,6 +259,7 @@ int main(int argc, char* argv[])
 	setupMapping();
 
 #if 0
+	struct sched_param param;
 	/* try to use a real-time scheduler*/
 	param.sched_priority = 1;
 	if(sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
