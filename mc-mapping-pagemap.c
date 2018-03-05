@@ -39,7 +39,6 @@
  * Public Definitions
  **************************************************************************/
 #define MAX_BIT   (24)                  // [27:23] bits are used for iterations
-#define CACHE_LINE_SIZE 64
 
 #define MAX(a,b) ((a>b)?(a):(b))
 #define MIN(a,b) ((a>b)?(b):(a))
@@ -58,7 +57,10 @@
 long g_mem_size;
 double g_fraction_of_physical_memory = 0.2;
 int g_cache_num_ways = 16;
+
 void *g_mapping;
+ulong *g_frame_phys;
+
 int g_cpuid = 0;
 int g_pagemap_fd;
 
@@ -86,25 +88,6 @@ size_t getPhysicalMemorySize() {
 }
 
 // ----------------------------------------------
-void setupMapping() {
-	g_mem_size =
-		(long)(g_fraction_of_physical_memory * getPhysicalMemorySize());
-	printf("mem_size (MB): %d\n", (int)(g_mem_size / 1024 / 1024));
-	
-	/* map */
-	g_mapping = mmap(NULL, g_mem_size, PROT_READ | PROT_WRITE,
-		       MAP_POPULATE | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-	assert(g_mapping != (void *) -1);
-
-	/* initialize */
-	for (int index = 0; index < g_mem_size; index += 0x1000) {
-		char *byte = (char *)g_mapping + index;
-		byte[0] = index % 256;
-	}
-	printf("allocation complete.\n");
-}
-
-// ----------------------------------------------
 size_t frameNumberFromPagemap(size_t value) {
 	return value & ((1ULL << 54) - 1);
 }
@@ -124,6 +107,32 @@ ulong  getPhysicalAddr(ulong virtual_addr)
 	ulong frame_num = frameNumberFromPagemap(value);
 	return (frame_num * 4096) | (virtual_addr & (4095));
 }
+
+// ----------------------------------------------
+void setupMapping() {
+	g_mem_size =
+		(long)(g_fraction_of_physical_memory * getPhysicalMemorySize());
+	printf("mem_size (MB): %d\n", (int)(g_mem_size / 1024 / 1024));
+	
+	/* map */
+	g_mapping = mmap(NULL, g_mem_size, PROT_READ | PROT_WRITE,
+		       MAP_POPULATE | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	assert(g_mapping != (void *) -1);
+
+	/* page virt -> phys translation table */
+	g_frame_phys = (ulong *)malloc(sizeof(long) * (g_mem_size / 0x1000));
+	
+	/* initialize */
+	for (int i = 0; i < g_mem_size; i += 0x1000) {
+		ulong vaddr, paddr;
+		vaddr = (ulong)(g_mapping + i);
+		*((ulong *)vaddr) = 0;
+		paddr = getPhysicalAddr(vaddr);
+		g_frame_phys[i/0x1000] = paddr;
+	}
+	printf("allocation complete.\n");
+}
+
 
 // ----------------------------------------------
 void initPagemap()
@@ -163,7 +172,7 @@ long *create_list(ulong match_mask, int max_shift, int min_count)
 	
 	for (int i = 0; i < g_mem_size; i += 0x1000) {
 		vaddr = (ulong)(g_mapping + i) + (match_mask & 0xFFF);
-		paddr = getPhysicalAddr(vaddr);
+		paddr = g_frame_phys[i/0x1000] + (match_mask & 0xFFF);
 		if (!((paddr & ((1<<max_shift) - 1)) ^ match_mask)) {
 			if (*(ulong *)vaddr > 0)
 				continue;
@@ -251,7 +260,7 @@ int main(int argc, char* argv[])
 	setupMapping();
 	
 	/* try to use a real-time scheduler*/
-	param.sched_priority = 10;
+	param.sched_priority = 1;
 	if(sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
 		perror("sched_setscheduler failed");
 	}
@@ -272,11 +281,12 @@ int main(int argc, char* argv[])
 			perror("error");
 	}
 
-	sleep(5);
+	sleep(2);
 
-	for (int bit = 6; bit < 24; bit++){
-		/* initialize data */
+	for (int bit = 5; bit < 24; bit++){
+                /* initialize data */
 		ulong bank_mask = (1<<bit);
+
 		long *subject_list =
 			create_list(bank_mask, MAX_BIT, g_cache_num_ways*2);
 
@@ -289,10 +299,6 @@ int main(int argc, char* argv[])
 		clock_gettime(CLOCK_REALTIME, &end);
 		int64_t nsdiff = get_elapsed(&start, &end);
 
-		/* double  avglat = (double)nsdiff/naccess; */
-		/* printf("size: %d MB\n", (int)(g_mem_size/1024/1024)); */
-		/* printf("duration %"PRId64"ns, #access %d\n", nsdiff, naccess); */
-		/* printf("average latency: %.2f ns\n", avglat); */
 		printf("Bit%d: %.2f MB/s, %.2f ns\n", bit,
 		       (double)64*1000*naccess/nsdiff,
 		       (double)nsdiff/naccess);
