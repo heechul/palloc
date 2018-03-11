@@ -129,6 +129,7 @@ void setupMapping() {
 		*((ulong *)vaddr) = 0;
 		paddr = getPhysicalAddr(vaddr);
 		g_frame_phys[i/0x1000] = paddr;
+		// printf("vaddr-paddr: %p-%p\n", (void *)vaddr, (void *)paddr);
 	}
 	printf("allocation complete.\n");
 }
@@ -252,7 +253,6 @@ int main(int argc, char* argv[])
 			printf("repeat=%d\n", repeat);
 			break;
 		}
-
 	}
 	
 	initPagemap();
@@ -284,7 +284,7 @@ int main(int argc, char* argv[])
 
 	sleep(2);
 
-	for (int bit = 5; bit < 24; bit++){
+	for (int bit = 6; bit < MAX_BIT; bit++){
                 /* initialize data */
 		ulong bank_mask = (1<<bit);
 
