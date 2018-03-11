@@ -123,7 +123,7 @@ void setupMapping() {
 	g_frame_phys = (ulong *)malloc(sizeof(long) * (g_mem_size / 0x1000));
 	
 	/* initialize */
-	for (int i = 0; i < g_mem_size; i += 0x1000) {
+	for (long i = 0; i < g_mem_size; i += 0x1000) {
 		ulong vaddr, paddr;
 		vaddr = (ulong)(g_mapping + i);
 		*((ulong *)vaddr) = 0;
@@ -170,7 +170,7 @@ long *create_list(ulong match_mask, int max_shift, int min_count)
 	
 	// printf("mask: 0x%lx, shift: %d\n", match_mask, max_shift);
 	
-	for (int i = 0; i < g_mem_size; i += 0x1000) {
+	for (long i = 0; i < g_mem_size; i += 0x1000) {
 		vaddr = (ulong)(g_mapping + i) + (match_mask & 0xFFF);
 		paddr = g_frame_phys[i/0x1000] + (match_mask & 0xFFF);
 		if (!((paddr & ((1<<max_shift) - 1)) ^ match_mask)) {
