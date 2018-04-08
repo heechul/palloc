@@ -201,7 +201,7 @@ long *create_list(ulong match_mask, int max_shift, int min_count)
 
 int run(long *list, int count)
 {
-	int i = 0;
+	long i = 0;
 	while (list && i++ < count) {
 		list = (long *)*list;
 	}
