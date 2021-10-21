@@ -57,7 +57,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
    ```
    - Other options
    ```
-	# echo 2 > /sys/kernel/debug/palloc/debug_level  
+	# echo 1 > /sys/kernel/debug/palloc/debug_level  
 	--> enable debug messsages visible through /sys/kernel/debug/tracing/trace. [Recommended]
 	# echo 4 > /sys/kernel/debug/palloc/alloc_balance
 	 --> wait until at least 4 different colors are in the color cache. [Recommended]
