@@ -163,7 +163,7 @@ The following is the result of the new detector on the Nehalem platform we used 
 	Bit22: 240.98 MB/s, 265.58 ns
 	Bit23: 294.10 MB/s, 217.62 ns
 
-We recommend using this (mc-mapping-pagemap) over the original mc-mapping. Unfortunately, it doesn't currently support XOR mapping detection. 
+We recommend using this (mc-mapping-pagemap) over the original mc-mapping. Note, however, that it currently does not support XOR mapping detection. 
 
 ## Address map database
 A set of successfully identified address map information can be found in the following wiki page. 
