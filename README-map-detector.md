@@ -129,9 +129,60 @@ number means that the two bits are XOR paired.
 Hence, we can conclude the final mappings, which select DRAM banks, are
 (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20). 
 
+## Safe pagemap based detector [experimental]
+
+We are currently testing a new detector that uses the safer pagemap interface instead of using /dev/mem. The new detector can be found in the repository: mc-mapping-pagemap.c.
+
+The following is the result of the new detector on the Nehalem platform we used in the original PALLOC paper, which clearly shows bit 12,13,19,20 are used for the mapping. 
+
+	$ make mc-mappgin-pagemap
+	gcc mc-mapping-pagemap.c -Wall -O2 -std=c11 -o mc-mapping-pagemap -lrt -lpthread -g
+
+	$ sudo chrt -f 1 ./mc-mapping-pagemap -p 0.7 -n 3
+	mem_size (MB): 2756
+	allocation complete.
+	worker thread begins
+	worker thread begins
+	worker thread begins
+	Bit6: 299.67 MB/s, 213.57 ns
+	Bit7: 307.61 MB/s, 208.05 ns
+	Bit8: 295.97 MB/s, 216.24 ns
+	Bit9: 297.84 MB/s, 214.88 ns
+	Bit10: 300.66 MB/s, 212.86 ns
+	Bit11: 245.89 MB/s, 260.28 ns
+	Bit12: 792.58 MB/s, 80.75 ns	<--- slower
+	Bit13: 789.23 MB/s, 81.09 ns	<--- slower
+	Bit14: 296.21 MB/s, 216.06 ns
+	Bit15: 294.19 MB/s, 217.55 ns
+	Bit16: 240.98 MB/s, 265.58 ns
+	Bit17: 294.20 MB/s, 217.54 ns
+	Bit18: 294.07 MB/s, 217.64 ns
+	Bit19: 789.05 MB/s, 81.11 ns	<--- slower
+	Bit20: 789.15 MB/s, 81.10 ns	<--- slower
+	Bit21: 294.17 MB/s, 217.56 ns
+	Bit22: 240.98 MB/s, 265.58 ns
+	Bit23: 294.10 MB/s, 217.62 ns
+
+We recommend using this (mc-mapping-pagemap) over the original mc-mapping. Unfortunately, it doesn't currently support XOR mapping detection. 
+
+## Address map database
 A set of successfully identified address map information can be found in the following wiki page. 
 
 https://github.com/heechul/palloc/wiki/Address-map-database
+
+## Limitations and other detection methods
+Our reverse engineering method does not work with many modern memory controllers which utilize more sophisticated XOR mapping schemes.
+
+If you are unable to detect the DRAM address mapping with the tools we provide here, consider checking the following alternatives.
+
+DRAMA
+https://github.com/IAIK/drama
+
+DRAMDig
+https://arxiv.org/pdf/2004.02354
+
+Blacksmith
+https://github.com/comsec-group/blacksmith
 
 References
 ==========
