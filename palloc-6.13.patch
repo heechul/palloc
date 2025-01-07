@@ -44,6 +44,45 @@ index b36124145..767928a3d 100644
  	/* zone flags, see below */
  	unsigned long		flags;
  
+diff --git a/include/linux/palloc.h b/include/linux/palloc.h
+new file mode 100644
+index 000000000..7236e313b
+--- /dev/null
++++ b/include/linux/palloc.h
+@@ -0,0 +1,33 @@
++#ifndef _LINUX_PALLOC_H
++#define _LINUX_PALLOC_H
++
++/*
++ * kernel/palloc.h
++ *
++ * Physical Memory Aware Allocator
++ */
++
++#include <linux/types.h>
++#include <linux/cgroup.h>
++#include <linux/kernel.h>
++#include <linux/mm.h>
++
++#ifdef CONFIG_CGROUP_PALLOC
++
++struct palloc {
++	struct cgroup_subsys_state css;
++	COLOR_BITMAP(cmap);
++};
++
++/* Retrieve the palloc group corresponding to this cgroup container */
++struct palloc *cgroup_ph(struct cgroup *cgrp);
++
++/* Retrieve the palloc group corresponding to this subsys */
++struct palloc *ph_from_subsys(struct cgroup_subsys_state *subsys);
++
++/* Return number of palloc bins */
++int palloc_bins(void);
++
++#endif /* CONFIG_CGROUP_PALLOC */
++
++#endif /* _LINUX_PALLOC_H */
 diff --git a/init/Kconfig b/init/Kconfig
 index a20e6efd3..45f966279 100644
 --- a/init/Kconfig
@@ -686,6 +725,185 @@ index cae7b9386..13f61915a 100644
  	while (pfn < end_pfn) {
  		page = pfn_to_page(pfn);
  		/*
+diff --git a/mm/palloc.c b/mm/palloc.c
+new file mode 100644
+index 000000000..8c31d9e2c
+--- /dev/null
++++ b/mm/palloc.c
+@@ -0,0 +1,173 @@
++/**
++ * kernel/palloc.c
++ *
++ * Color Aware Physical Memory Allocator User-Space Information
++ *
++ */
++
++#include <linux/types.h>
++#include <linux/cgroup.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/palloc.h>
++#include <linux/mm.h>
++#include <linux/err.h>
++#include <linux/fs.h>
++#include <linux/bitmap.h>
++#include <linux/module.h>
++
++/**
++ * Check if a page is compliant with the policy defined for the given vma
++ */
++#ifdef CONFIG_CGROUP_PALLOC
++
++#define MAX_LINE_LEN (6 * 128)
++
++/**
++ * Type of files in a palloc group
++ * FILE_PALLOC - contains list of palloc bins allowed
++ */
++typedef enum {
++	FILE_PALLOC,
++} palloc_filetype_t;
++
++/**
++ * Retrieve the palloc group corresponding to this cgroup container
++ */
++struct palloc *cgroup_ph(struct cgroup *cgrp)
++{
++	return container_of(cgrp->subsys[palloc_cgrp_id], struct palloc, css);
++}
++
++struct palloc *ph_from_subsys(struct cgroup_subsys_state *subsys)
++{
++	return container_of(subsys, struct palloc, css);
++}
++
++/**
++ * Common write function for files in palloc cgroup
++ */
++static int update_bitmask(unsigned long *bitmap, const char *buf, int maxbits)
++{
++	int retval = 0;
++
++	if (!*buf)
++		bitmap_clear(bitmap, 0, maxbits);
++	else
++		retval = bitmap_parselist(buf, bitmap, maxbits);
++
++	return retval;
++}
++
++static ssize_t palloc_file_write(struct kernfs_open_file *of, char *buf, size_t nbytes, loff_t off)
++{
++	struct cgroup_subsys_state *css;
++	struct cftype *cft;
++	int retval = 0;
++	struct palloc *ph;
++
++	css = of_css(of);
++	cft = of_cft(of);
++	ph = container_of(css, struct palloc, css);
++
++	switch (cft->private) {
++		case FILE_PALLOC:
++			retval = update_bitmask(ph->cmap, buf, palloc_bins());
++			printk(KERN_INFO "Bins : %s\n", buf);
++			break;
++
++		default:
++			retval = -EINVAL;
++			break;
++	}
++
++	return retval? :nbytes;
++}
++
++static int palloc_file_read(struct seq_file *sf, void *v)
++{
++	struct cgroup_subsys_state *css = seq_css(sf);
++	struct cftype *cft = seq_cft(sf);
++	struct palloc *ph = container_of(css, struct palloc, css);
++	char *page;
++	ssize_t retval = 0;
++	char *s;
++
++	if (!(page = (char *)__get_free_page( __GFP_ZERO)))
++		return -ENOMEM;
++
++	s = page;
++
++	switch (cft->private) {
++		case FILE_PALLOC:
++			s += scnprintf(s, PAGE_SIZE, "%*pbl", (int)palloc_bins(), ph->cmap);
++			*s++ = '\n';
++			printk(KERN_INFO "Bins : %s", page);
++			break;
++
++		default:
++			retval = -EINVAL;
++			goto out;
++	}
++
++	seq_printf(sf, "%s", page);
++
++out:
++	free_page((unsigned long)page);
++	return retval;
++}
++
++/**
++ * struct cftype : handler definitions for cgroup control files
++ *
++ * for the common functions, 'private' gives the type of the file
++ */
++static struct cftype files[] = {
++	{
++		.name 		= "bins",
++		.seq_show	= palloc_file_read,
++		.write		= palloc_file_write,
++		.max_write_len	= MAX_LINE_LEN,
++		.private	= FILE_PALLOC,
++	},
++	{}
++};
++
++
++/**
++ * palloc_create - create a palloc group
++ */
++static struct cgroup_subsys_state *palloc_create(struct cgroup_subsys_state *css)
++{
++	struct palloc *ph_child;
++
++	ph_child = kmalloc(sizeof(struct palloc), GFP_KERNEL);
++
++	if (!ph_child)
++		return ERR_PTR(-ENOMEM);
++
++	bitmap_clear(ph_child->cmap, 0, MAX_PALLOC_BINS);
++
++	return &ph_child->css;
++}
++
++/**
++ * Destroy an existing palloc group
++ */
++static void palloc_destroy(struct cgroup_subsys_state *css)
++{
++	struct palloc *ph = container_of(css, struct palloc, css);
++
++	kfree(ph);
++}
++
++struct cgroup_subsys palloc_cgrp_subsys = {
++	.name		= "palloc",
++	.css_alloc	= palloc_create,
++	.css_free	= palloc_destroy,
++	.id		= palloc_cgrp_id,
++	.dfl_cftypes	= files,
++	.legacy_cftypes	= files,
++};
++
++#endif /* CONFIG_CGROUP_PALLOC */
 diff --git a/mm/vmstat.c b/mm/vmstat.c
 index 4d016314a..1fbc1ecc4 100644
 --- a/mm/vmstat.c
