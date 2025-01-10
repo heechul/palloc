@@ -153,7 +153,7 @@ index 24b68b425..1aa82abd0 100644
  		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
  		zone->free_area[order].nr_free = 0;
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index cae7b9386..13f61915a 100644
+index cae7b9386..b27bcaba6 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -52,6 +52,7 @@
@@ -667,8 +667,8 @@ index cae7b9386..13f61915a 100644
 +			page = get_page_from_free_area(area, migratetype);
 +			if (!page)
 +				continue;
-+			del_page_from_free_list(page, zone, current_order, migratetype);
-+			expand(zone, page, order, current_order, migratetype);
++			page_del_and_expand(zone, page, order, current_order,
++				    migratetype);
 +			trace_mm_page_alloc_zone_locked(page, order, migratetype,
 +					pcp_allowed_order(order) &&
 +					migratetype < MIGRATE_PCPTYPES);
