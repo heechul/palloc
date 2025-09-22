@@ -150,15 +150,15 @@ The following is the result of the new detector on the Nehalem platform we used 
 	Bit9: 297.84 MB/s, 214.88 ns
 	Bit10: 300.66 MB/s, 212.86 ns
 	Bit11: 245.89 MB/s, 260.28 ns
-	Bit12: 792.58 MB/s, 80.75 ns	<--- slower
-	Bit13: 789.23 MB/s, 81.09 ns	<--- slower
+	Bit12: 792.58 MB/s, 80.75 ns	<--- faster
+	Bit13: 789.23 MB/s, 81.09 ns	<--- faster
 	Bit14: 296.21 MB/s, 216.06 ns
 	Bit15: 294.19 MB/s, 217.55 ns
 	Bit16: 240.98 MB/s, 265.58 ns
 	Bit17: 294.20 MB/s, 217.54 ns
 	Bit18: 294.07 MB/s, 217.64 ns
-	Bit19: 789.05 MB/s, 81.11 ns	<--- slower
-	Bit20: 789.15 MB/s, 81.10 ns	<--- slower
+	Bit19: 789.05 MB/s, 81.11 ns	<--- faster
+	Bit20: 789.15 MB/s, 81.10 ns	<--- faster
 	Bit21: 294.17 MB/s, 217.56 ns
 	Bit22: 240.98 MB/s, 265.58 ns
 	Bit23: 294.10 MB/s, 217.62 ns
