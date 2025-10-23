@@ -1,0 +1,292 @@
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index cf454670ad1f..7c23c96438d5 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -105,13 +105,22 @@ EXPORT_SYMBOL(memdbg_enable);
+ 
+ static int sysctl_alloc_balance = 0;
+ 
+-/* PALLOC address bitmask */
+-static unsigned long sysctl_palloc_mask = 0x0;
++/* PALLOC address bitmask: now support multiple bank-bit masks.
++ * Each entry sysctl_palloc_masks[i] is a bitmap of PA bit indices that
++ * are XORed together to form the bank bit i.  For example a map file
++ * with lines:
++ *   8
++ *   19
++ *   11 20 25
++ * means sysctl_palloc_masks[0] has bit 8 set, [1] has bit 19 set,
++ * and [2] has bits 11,20,25 set.
++ */
++static unsigned long sysctl_palloc_masks[MAX_PALLOC_BITS];
++static int palloc_masks_count = 0;
++static DEFINE_SPINLOCK(palloc_map_lock);
++static COLOR_BITMAP(allcmap); // global bitmap of all colors
+ 
+-static int mc_xor_bits[64];
+-static int use_mc_xor = 0;
+ static int use_palloc = 0;
+-
+ DEFINE_PER_CPU(unsigned long, palloc_rand_seed);
+ 
+ #define memdbg(lvl, fmt, ...)						\
+@@ -144,7 +153,9 @@ static struct {
+ 	struct palloc_stat stat[3]; 	/* 0 - color, 1 - normal, 2- fail */
+ } palloc;
+ 
++// Forward declarations
+ static void palloc_flush(struct zone *zone);
++static void palloc_flush_allzone(void);
+ 
+ static ssize_t palloc_write(struct file *filp, const char __user *ubuf, size_t cnt, loff_t *ppos)
+ {
+@@ -161,23 +172,73 @@ static ssize_t palloc_write(struct file *filp, const char __user *ubuf, size_t c
+ 			memset(&palloc.stat[i], 0, sizeof(struct palloc_stat));
+ 			palloc.stat[i].min_ns = 0x7fffffff;
+ 		}
+-	} else if (!strncmp(buf, "flush", 5)) {
+-		struct zone *zone;
+-		printk(KERN_INFO "flush color cache...\n");
+-		for_each_populated_zone(zone) {
+-			unsigned long flags;
+-			if (!zone)
+-				continue;
+-			spin_lock_irqsave(&zone->lock, flags);
+-			palloc_flush(zone);
+-			spin_unlock_irqrestore(&zone->lock, flags);
+-		}
+-	} else if (!strncmp(buf, "xor", 3)) {
+-		int bit, xor_bit;
+-		sscanf(buf + 4, "%d %d", &bit, &xor_bit);
+-		if ((bit > 0 && bit < 64) && (xor_bit > 0 && xor_bit < 64) && bit != xor_bit) {
+-			mc_xor_bits[bit] = xor_bit;
++	} else if (!strncmp(buf, "enable", 6)) {
++		use_palloc = 1;
++		printk(KERN_INFO "enable palloc...\n");
++	} else if (!strncmp(buf, "disable", 7)) {
++		use_palloc = 0;
++		printk(KERN_INFO "disable palloc...\n");
++		palloc_flush_allzone();
++	} else {
++		/* Try to parse as a bank map: lines with PA bit indices per bank bit.
++		 * Example:
++		 * 8\n
++		 * 19\n
++		 * 11 20 25\n
++		 */
++		int bank = 0;
++		unsigned long flags_lock;
++		printk(KERN_INFO "set palloc bank map...\n");
++		spin_lock_irqsave(&palloc_map_lock, flags_lock);
++		char *p = buf;
++		while (p && *p && bank < MAX_PALLOC_BITS) {
++			/* skip leading whitespace/newlines */
++			while (*p == '\n' || *p == '\r') p++;
++			if (!*p)
++				break;
++			/* parse one line */
++			char *line = p;
++			char *nl = strchr(p, '\n');
++			if (nl) {
++				*nl = '\0';
++				p = nl + 1;
++			} else {
++				/* last line */
++				p = NULL;
++			}
++
++			/* clear this bank mask */
++			sysctl_palloc_masks[bank] = 0UL;
++
++			/* parse integers in line */
++			char *s = line;
++			while (s && *s) {
++				char *endp;
++				unsigned long bit = simple_strtoul(s, &endp, 10);
++				if (endp == s)
++					break;
++				if (bit < (sizeof(unsigned long) * 8))
++					sysctl_palloc_masks[bank] |= (1UL << bit);
++				s = endp;
++				while (*s == ' ' || *s == '\t') s++;
++			}
++
++			bank++;
+ 		}
++		palloc_masks_count = bank;
++		/* clear remaining bank masks */
++		for (i = bank; i < MAX_PALLOC_BITS; i++)
++			sysctl_palloc_masks[i] = 0UL;
++
++		spin_unlock_irqrestore(&palloc_map_lock, flags_lock);
++
++		/* reset allcmap */
++		bitmap_zero(allcmap, MAX_PALLOC_BINS);
++		/* set all colors as available */
++		bitmap_fill(allcmap, palloc_masks_count);
++
++		/* flush all zone caches */
++		palloc_flush_allzone();
+ 	}
+ 
+ 	*ppos += cnt;
+@@ -189,7 +250,6 @@ static int palloc_show(struct seq_file *m, void *v)
+ {
+ 	int i, tmp;
+ 	char *desc[] = { "Color", "Normal", "Fail" };
+-	char buf[256];
+ 
+ 	for (i = 0; i < 3; i++) {
+ 		struct palloc_stat *stat = &palloc.stat[i];
+@@ -211,24 +271,23 @@ static int palloc_show(struct seq_file *m, void *v)
+ 			   stat->alloc_balance, stat->alloc_balance_timeout);
+ 	}
+ 
+-	seq_printf(m, "mask: 0x%lx\n", sysctl_palloc_mask);
+-
+-	tmp = bitmap_weight(&sysctl_palloc_mask, sizeof(unsigned long)*8);
+-
+-	seq_printf(m, "weight: %d (bins: %d)\n", tmp, (1 << tmp));
+-
+-	scnprintf(buf, 256, "%*pbl", (int)(sizeof(unsigned long) * 8), &sysctl_palloc_mask);
+-
+-	seq_printf(m, "bits: %s\n", buf);
+-
+-	seq_printf(m, "XOR bits: %s\n", (use_mc_xor)? "enabled" : "disabled");
+-
+-	for (i = 0; i < 64; i++) {
+-		if (mc_xor_bits[i] > 0)
+-			seq_printf(m, "    %3d <-> %3d\n", i, mc_xor_bits[i]);
++	seq_printf(m, "bank_map:\n");
++	for (i = 0; i < MAX_PALLOC_BITS; i++) {
++		unsigned long mask = sysctl_palloc_masks[i];
++		if (!mask)
++			break;
++		seq_printf(m, "bank_bits[%d]: ", i);
++		for (tmp = 0; tmp < (int)(sizeof(unsigned long) * 8); tmp++) {
++			if ((mask >> tmp) & 0x1)
++				seq_printf(m, "%d ", tmp);
++		}
++		seq_printf(m, "\n");
+ 	}
+ 
+-	seq_printf(m, "Use PALLOC: %s\n", (use_palloc)? "enabled" : "disabled");
++	seq_printf(m, "palloc_masks_count: %d\n", palloc_masks_count);
++	seq_printf(m, "use_palloc: %d\n", use_palloc);
++	seq_printf(m, "alloc_balance: %d\n", sysctl_alloc_balance);
++	seq_printf(m, "memdbg_enable: %d\n", memdbg_enable);
+ 
+ 	return 0;
+ }
+@@ -264,9 +323,6 @@ static int __init palloc_debugfs(void)
+ 		return PTR_ERR(dir);
+ 	if (!debugfs_create_file("control", mode, dir, NULL, &palloc_fops))
+ 		goto fail;
+-	debugfs_create_u64("palloc_mask", mode, dir, (u64 *)&sysctl_palloc_mask);
+-	debugfs_create_u32("use_mc_xor", mode, dir, (u32 *)&use_mc_xor);
+-	debugfs_create_u32("use_palloc", mode, dir, (u32 *)&use_palloc);
+ 	debugfs_create_u32("debug_level", mode, dir, (u32 *)&memdbg_enable);
+ 	debugfs_create_u32("alloc_balance", mode, dir, (u32 *)&sysctl_alloc_balance);
+ 
+@@ -1732,28 +1788,37 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
+ 
+ int palloc_bins(void)
+ {
+-	return min((1 << bitmap_weight(&sysctl_palloc_mask, sizeof(unsigned long) * 8)), MAX_PALLOC_BINS);
++	return palloc_masks_count;
+ }
+ 
+-static inline int page_to_color(struct page *page)
++static int page_to_color(struct page *page)
+ {
+ 	int color = 0;
+-	int idx = 0;
+-	int c;
+ 
+ 	unsigned long paddr = page_to_phys(page);
+-	for_each_set_bit(c, &sysctl_palloc_mask, sizeof(unsigned long) * 8) {
+-		if (use_mc_xor) {
+-			if (((paddr >> c) & 0x1) ^ ((paddr >> mc_xor_bits[c]) & 0x1))
+-				color |= (1 << idx);
+-		} else {
+-			if ((paddr >> c) & 0x1)
+-				color |= (1 << idx);
++	unsigned long __flags;
++
++	spin_lock_irqsave(&palloc_map_lock, __flags);
++
++	for (int c = 0; c < palloc_masks_count; c++) {
++		unsigned long mask = sysctl_palloc_masks[c];
++#if 0 // unoptimized version
++		int bit_parity = 0;
++		for (int b = 0; b < (int)(sizeof(unsigned long) * 8); b++) {
++			if ((mask >> b) & 0x1) {
++				int val = (paddr >> b) & 0x1;
++				bit_parity ^= val;
++			}
+ 		}
+-
+-		idx++;
++		if (bit_parity)
++			color |= (1 << c);
++#else
++		if (hweight_long(paddr & mask) & 1UL) {
++			color |= (1 << c);
++		}
++#endif
+ 	}
+-
++	spin_unlock_irqrestore(&palloc_map_lock, __flags);
+ 	return color;
+ }
+ 
+@@ -1799,6 +1864,22 @@ static void palloc_flush(struct zone *zone)
+ 	}
+ }
+ 
++/* Flush all zones' color cache */
++static void palloc_flush_allzone()
++{
++	struct zone *zone;
++	printk(KERN_INFO "flush color cache...\n");
++	for_each_populated_zone(zone) {
++		unsigned long flags;
++		if (!zone)
++			continue;
++		spin_lock_irqsave(&zone->lock, flags);
++		palloc_flush(zone);
++		spin_unlock_irqrestore(&zone->lock, flags);
++	}
++	printk(KERN_INFO "flush color cache done.\n");
++}
++
+ static inline void rmv_page_order(struct page *page)
+ {
+ 	__ClearPageBuddy(page);
+@@ -1835,7 +1916,7 @@ static void palloc_insert(struct zone *zone, struct page *page, int order)
+ }
+ 
+ /* Return a colored page (order-0) and remove it from the colored cache */
+-static inline struct page *palloc_find_cmap(struct zone *zone, COLOR_BITMAP(cmap), int order, struct palloc_stat *stat)
++static inline struct page *palloc_find_cmap(struct zone *zone, unsigned long* cmap, int order, struct palloc_stat *stat)
+ {
+ 	struct page *page;
+ 	COLOR_BITMAP(tmpmask);
+@@ -1958,7 +2039,6 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+ 	struct palloc_stat *f_stat = &palloc.stat[2];
+ 
+ 	int iters = 0;
+-	COLOR_BITMAP(tmpcmap);
+ 	unsigned long *cmap;
+ 
+ 	if (memdbg_enable)
+@@ -1973,8 +2053,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+ 	if (ph && bitmap_weight(ph->cmap, MAX_PALLOC_BINS) > 0)
+ 		cmap = ph->cmap;
+ 	else {
+-		bitmap_fill(tmpcmap, MAX_PALLOC_BINS);
+-		cmap = tmpcmap;
++		cmap = allcmap;
+ 	}
+ 
+ 	page = NULL;
