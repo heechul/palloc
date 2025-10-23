@@ -1,0 +1,49 @@
+diff --git a/drivers/video/fbdev/hyperv_fb.c b/drivers/video/fbdev/hyperv_fb.c
+index 2aad53d0de15..8a9f0b7a07d8 100644
+--- a/drivers/video/fbdev/hyperv_fb.c
++++ b/drivers/video/fbdev/hyperv_fb.c
+@@ -1192,7 +1192,7 @@ static int hvfb_probe(struct hv_device *hdev,
+ 	if (ret)
+ 		goto error;
+ 
+-	ret = devm_register_framebuffer(&hdev->device, info);
++	ret = unregister_framebuffer(&hdev->device, info);
+ 	if (ret) {
+ 		pr_err("Unable to register framebuffer\n");
+ 		goto error;
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index a29cdead2051..8c90b8273c07 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -92,6 +92,11 @@ static DEFINE_MUTEX(pcp_batch_high_lock);
+ 
+ #ifdef CONFIG_CGROUP_PALLOC
+ #include <linux/palloc.h>
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE > KERNEL_VERSION(6, 8, 0)
++#define MAX_ORDER MAX_PAGE_ORDER
++#endif
+ 
+ int memdbg_enable = 0;
+ EXPORT_SYMBOL(memdbg_enable);
+diff --git a/mm/vmstat.c b/mm/vmstat.c
+index 9915a5aca88a..f3e02cd237f3 100644
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -31,8 +31,15 @@
+ 
+ #ifdef CONFIG_CGROUP_PALLOC
+ #include <linux/palloc.h>
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE > KERNEL_VERSION(6, 8, 0)
++#define MAX_ORDER MAX_PAGE_ORDER
++#endif
++
+ #endif
+ 
++
+ #include "internal.h"
+ 
+ #ifdef CONFIG_NUMA
