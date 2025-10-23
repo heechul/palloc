@@ -7,6 +7,8 @@
  * This file is distributed under the University of Illinois Open Source
  * License. See LICENSE.TXT for details.
  *
+ * Compile: gcc mc-mapping-pagemap.c -Wall -O2 -std=c11 -o mc-mapping-pagemap -lrt -lpthread -g
+ * Run (needs root for /proc/self/pagemap): sudo chrt -f 1 ./mc-mapping-pagemap -p 0.7 -n 3
  */ 
 
 /**************************************************************************
@@ -38,7 +40,7 @@
 /**************************************************************************
  * Public Definitions
  **************************************************************************/
-#define MAX_BIT   (24)                  // [27:23] bits are used for iterations
+#define PAGE_SIZE (4096) 			    // PAGE_SIZE or 4KB
 
 #define MAX(a,b) ((a>b)?(a):(b))
 #define MIN(a,b) ((a>b)?(b):(a))
@@ -54,6 +56,9 @@
 /**************************************************************************
  * Global Variables
  **************************************************************************/
+int g_min_bit = 6;  // PA[6..22] will be tested for bank mapping
+int g_max_bit = 23; // PA[23..XX] will be used to create eviction sets
+
 long g_mem_size;
 double g_fraction_of_physical_memory = 0.2;
 int g_cache_num_ways = 16;
@@ -120,15 +125,15 @@ void setupMapping() {
 	assert(g_mapping != (void *) -1);
 
 	/* page virt -> phys translation table */
-	g_frame_phys = (ulong *)malloc(sizeof(long) * (g_mem_size / 0x1000));
+	g_frame_phys = (ulong *)malloc(sizeof(long) * (g_mem_size / PAGE_SIZE));
 	
 	/* initialize */
-	for (long i = 0; i < g_mem_size; i += 0x1000) {
+	for (long i = 0; i < g_mem_size; i += PAGE_SIZE) {
 		ulong vaddr, paddr;
 		vaddr = (ulong)(g_mapping + i);
 		*((ulong *)vaddr) = 0;
 		paddr = getPhysicalAddr(vaddr);
-		g_frame_phys[i/0x1000] = paddr;
+		g_frame_phys[i/PAGE_SIZE] = paddr;
 		// printf("vaddr-paddr: %p-%p\n", (void *)vaddr, (void *)paddr);
 	}
 	printf("allocation complete.\n");
@@ -171,9 +176,9 @@ long *create_list(ulong match_mask, int max_shift, int min_count)
 	
 	// printf("mask: 0x%lx, shift: %d\n", match_mask, max_shift);
 	
-	for (long i = 0; i < g_mem_size; i += 0x1000) {
+	for (long i = 0; i < g_mem_size; i += PAGE_SIZE) {
 		vaddr = (ulong)(g_mapping + i) + (match_mask & 0xFFF);
-		paddr = g_frame_phys[i/0x1000] + (match_mask & 0xFFF);
+		paddr = g_frame_phys[i/PAGE_SIZE] + (match_mask & 0xFFF);
 		if (!((paddr & ((1<<max_shift) - 1)) ^ match_mask)) {
 			if (*(ulong *)vaddr > 0)
 				continue;
@@ -252,9 +257,22 @@ int main(int argc, char* argv[])
 			repeat = strtol(optarg, NULL, 0);
 			printf("repeat=%d\n", repeat);
 			break;
+		case 'h':
+			fprintf(stderr, "Usage: %s [-w cache_num_ways] [-p memory_fraction] [-c cpu_id] [-n #of_corunners] [-i iterations] [-h]\n",
+				argv[0]);
+			exit(EXIT_FAILURE);
 		}
 	}
-	
+
+	/* print configuration */
+	printf("cache_num_ways: %d\n", g_cache_num_ways);
+	printf("memory_fraction: %.2f\n", g_fraction_of_physical_memory);
+	printf("cpu_id: %d\n", g_cpuid);
+	printf("#of corunners: %d\n", n_corun);
+	printf("num_processors: %d\n", num_processors);
+	printf("iterations: %d\n", repeat);
+
+	/* initialize pagemap */
 	initPagemap();
 	setupMapping();
 
@@ -273,7 +291,7 @@ int main(int argc, char* argv[])
 	/* thread affinity set */
 	for (int i = 0; i < MIN(1+n_corun, num_processors); i++) {
 		if (i != 0) {
-			corun_list[i] = create_list(0x0, MAX_BIT, g_cache_num_ways*2);
+			corun_list[i] = create_list(0x0, g_max_bit, g_cache_num_ways*2);
 			pthread_create(&tid[i], &attr, (void *)worker, corun_list[i]);
 		}
 		CPU_ZERO(&cmask);
@@ -284,12 +302,12 @@ int main(int argc, char* argv[])
 
 	sleep(2);
 
-	for (int bit = 6; bit < MAX_BIT; bit++){
+	for (int bit = g_min_bit; bit < g_max_bit; bit++){
                 /* initialize data */
 		ulong bank_mask = (1<<bit);
 
 		long *subject_list =
-			create_list(bank_mask, MAX_BIT, g_cache_num_ways*2);
+			create_list(bank_mask, g_max_bit, g_cache_num_ways*2);
 
 		/* subject measurement */
 		struct timespec start, end;
