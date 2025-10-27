@@ -153,7 +153,7 @@ index 51960079875b..635b2836eb55 100644
  		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
  		zone->free_area[order].nr_free = 0;
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 2f19464db66e..54dd51d2d24c 100644
+index 2f19464db66e..18764504c92d 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -52,6 +52,7 @@
@@ -164,7 +164,7 @@ index 2f19464db66e..54dd51d2d24c 100644
  #include <linux/delayacct.h>
  #include <linux/cacheinfo.h>
  #include <linux/pgalloc_tag.h>
-@@ -90,6 +91,252 @@ typedef int __bitwise fpi_t;
+@@ -90,6 +91,255 @@ typedef int __bitwise fpi_t;
  
  /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
  static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -253,6 +253,9 @@ index 2f19464db66e..54dd51d2d24c 100644
 +	} else if (!strncmp(buf, "disable", 7)) {
 +		printk(KERN_INFO "disable palloc...\n");
 +		use_palloc = 0;
++		palloc_flush_allzone();
++	} else if (!strncmp(buf, "flush", 5)) {
++		printk(KERN_INFO "flush all zone palloc caches...\n");
 +		palloc_flush_allzone();
 +	} else {
 +		/* Try to parse as a bank map: lines with PA bit indices per bank bit.
@@ -417,7 +420,7 @@ index 2f19464db66e..54dd51d2d24c 100644
  #define MIN_PERCPU_PAGELIST_HIGH_FRACTION (8)
  
  #if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
-@@ -1537,6 +1784,316 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
+@@ -1537,6 +1787,323 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
  		clear_page_pfmemalloc(page);
  }
  
@@ -470,8 +473,14 @@ index 2f19464db66e..54dd51d2d24c 100644
 +			if (!list_empty(&zone->color_list[c])) {
 +				page = list_entry(zone->color_list[c].next, struct page, buddy_list);
 +				list_del_init(&page->buddy_list);
-+				__free_one_page(page, page_to_pfn(page), zone, 0, get_pageblock_migratetype(page), FPI_NONE);
++
++				int migratetype = get_pageblock_migratetype(page);
++				/* mark as buddy and add to free list (this increments area->nr_free) */
++				__add_to_free_list(page, zone, 0, migratetype, true);
++				set_buddy_order(page, 0);
++				/* compensate because page was already counted in area->nr_free while in color cache */
 +				zone->free_area[0].nr_free--;
++				/* do NOT call account_freepages() here — keep NR_FREE_PAGES unchanged */
 +			}
 +
 +			if (list_empty(&zone->color_list[c])) {
@@ -583,6 +592,7 @@ index 2f19464db66e..54dd51d2d24c 100644
 +	/* Remove the page from the zone->color_list[color] */
 +	list_del(&page->buddy_list);
 +	zone->free_area[0].nr_free--;
++	account_freepages(zone, -(1 << 0), get_pageblock_migratetype(page));
 +
 +	if (list_empty(&zone->color_list[c]))
 +		bitmap_clear(zone->color_bitmap, c, 1);
@@ -734,7 +744,7 @@ index 2f19464db66e..54dd51d2d24c 100644
  /*
   * Go through the free lists for the given migratetype and remove
   * the smallest available page from the freelists
-@@ -1566,6 +2123,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+@@ -1566,6 +2133,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
  	return NULL;
  }
  
@@ -742,7 +752,7 @@ index 2f19464db66e..54dd51d2d24c 100644
  
  /*
   * This array describes the order lists are fallen back to when
-@@ -3053,7 +3611,14 @@ struct page *rmqueue(struct zone *preferred_zone,
+@@ -3053,7 +3621,14 @@ struct page *rmqueue(struct zone *preferred_zone,
  	 */
  	WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
  
@@ -757,7 +767,7 @@ index 2f19464db66e..54dd51d2d24c 100644
  		page = rmqueue_pcplist(preferred_zone, zone, order,
  				       migratetype, alloc_flags);
  		if (likely(page))
-@@ -6747,6 +7312,11 @@ unsigned long __offline_isolated_pages(unsigned long start_pfn,
+@@ -6747,6 +7322,11 @@ unsigned long __offline_isolated_pages(unsigned long start_pfn,
  	offline_mem_sections(pfn, end_pfn);
  	zone = page_zone(pfn_to_page(pfn));
  	spin_lock_irqsave(&zone->lock, flags);
