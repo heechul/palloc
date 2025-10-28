@@ -153,7 +153,7 @@ index 51960079875b..635b2836eb55 100644
  		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
  		zone->free_area[order].nr_free = 0;
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 2f19464db66e..18764504c92d 100644
+index 2f19464db66e..a25eeab7dac9 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -52,6 +52,7 @@
@@ -193,10 +193,10 @@ index 2f19464db66e..18764504c92d 100644
 + * and [2] has bits 11,20,25 set.
 + */
 +static unsigned long sysctl_palloc_masks[MAX_PALLOC_BITS];
-+static int palloc_masks_count = 0;
++static volatile int palloc_masks_count = 0;
 +static COLOR_BITMAP(allcmap); // global bitmap of all colors
 +
-+static int use_palloc = 0;
++static volatile int use_palloc = 0;
 +
 +#define memdbg(lvl, fmt, ...)						\
 +	do {								\
@@ -358,7 +358,7 @@ index 2f19464db66e..18764504c92d 100644
 +			break;
 +		seq_printf(m, "bank_bits[%d]: ", i);
 +		for (tmp = 0; tmp < (int)(sizeof(unsigned long) * 8); tmp++) {
-+			if ((mask >> tmp) & 0x1)
++			if ((mask >> tmp) & 0x1UL)
 +				seq_printf(m, "%d ", tmp);
 +		}
 +		seq_printf(m, "\n");
@@ -420,7 +420,7 @@ index 2f19464db66e..18764504c92d 100644
  #define MIN_PERCPU_PAGELIST_HIGH_FRACTION (8)
  
  #if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
-@@ -1537,6 +1787,323 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
+@@ -1537,6 +1787,329 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
  		clear_page_pfmemalloc(page);
  }
  
@@ -441,11 +441,9 @@ index 2f19464db66e..18764504c92d 100644
 +		unsigned long mask = sysctl_palloc_masks[i];
 +#if 0 // unoptimized version
 +		int bit_parity = 0;
-+		for (int b = 0; b < (int)(sizeof(unsigned long) * 8); b++) {
-+			if ((mask >> b) & 0x1) {
-+				int val = (paddr >> b) & 0x1;
-+				bit_parity ^= val;
-+			}
++		int b;
++		for_each_set_bit(b, &mask, BITS_PER_LONG) {
++			bit_parity ^= ((paddr >> b) & 1UL);
 +		}
 +		if (bit_parity)
 +			color |= (1 << i);
@@ -519,9 +517,15 @@ index 2f19464db66e..18764504c92d 100644
 +	   Remove from zone->free_area[order].free_list[mt] */
 +	list_del(&page->buddy_list);
 +	zone->free_area[order].nr_free--;
++	__ClearPageBuddy(page);
++	set_page_private(page, 0);
 +
 +	/* Insert pages to zone->color_list[] (all order-0) */
 +	for (i = 0; i < (1 << order); i++) {
++		/* Clear PageBuddy for each individual page */
++		__ClearPageBuddy(&page[i]);
++		set_page_private(&page[i], 0);
++
 +		color = page_to_color(&page[i]);
 +
 +		/* Add to zone->color_list[color] */
@@ -531,15 +535,13 @@ index 2f19464db66e..18764504c92d 100644
 +		list_add_tail(&page[i].buddy_list, &zone->color_list[color]);
 +		bitmap_set(zone->color_bitmap, color, 1);
 +		zone->free_area[0].nr_free++;
-+		__ClearPageBuddy(page);
-+		set_page_private(page, 0);
 +	}
 +
 +	memdbg(4, "Add order=%d zone=%s\n", order, zone->name);
 +}
 +
 +/* Return a colored page (order-0) and remove it from the colored cache */
-+static inline struct page *palloc_find_cmap(struct zone *zone, unsigned long* cmap, int order, struct palloc_stat *stat)
++static struct page *palloc_find_cmap(struct zone *zone, unsigned long* cmap, int order, struct palloc_stat *stat)
 +{
 +	struct page *page;
 +	COLOR_BITMAP(tmpmask);
@@ -552,8 +554,11 @@ index 2f19464db66e..18764504c92d 100644
 +	if (stat) stat->cache_acc_cnt++;
 +
 +	/* Find color cache entry */
-+	if (!bitmap_intersects(zone->color_bitmap, cmap, MAX_PALLOC_BINS))
++	if (!bitmap_intersects(zone->color_bitmap, cmap, MAX_PALLOC_BINS)) {
++		/* No matching color */
++		memdbg(5, "No matching color found in zone %s\n", zone->name);
 +		return NULL;
++	}
 +
 +	bitmap_and(tmpmask, zone->color_bitmap, cmap, MAX_PALLOC_BINS);
 +
@@ -576,6 +581,7 @@ index 2f19464db66e..18764504c92d 100644
 +	rand_seed = get_random_long();
 +	tmp_idx = rand_seed % found_w;
 +
++	// select the tmp_idx-th set bit in tmpmask
 +	for_each_set_bit(c, tmpmask, MAX_PALLOC_BINS) {
 +		if (tmp_idx-- <= 0)
 +			break;
@@ -586,8 +592,8 @@ index 2f19464db66e..18764504c92d 100644
 +
 +	page = list_entry(zone->color_list[c].next, struct page, buddy_list);
 +
-+	memdbg(1, "Found colored page pfn %ld color %d seed %ld found/want %d/%d\n",
-+	       page_to_pfn(page), c, rand_seed, found_w, want_w);
++	memdbg(1, "Found colored page (0x%08llx) color %d found/want %d/%d\n",
++	       (u64)page_to_phys(page), c, found_w, want_w);
 +
 +	/* Remove the page from the zone->color_list[color] */
 +	list_del(&page->buddy_list);
@@ -604,7 +610,7 @@ index 2f19464db66e..18764504c92d 100644
 +	return page;
 +}
 +
-+static inline void update_stat(struct palloc_stat *stat, struct page *page, int iters)
++static void update_stat(struct palloc_stat *stat, struct page *page, int iters)
 +{
 +	ktime_t dur;
 +
@@ -662,9 +668,9 @@ index 2f19464db66e..18764504c92d 100644
 +	/* cgroup information */
 +	ph = ph_from_subsys(current->cgroups->subsys[palloc_cgrp_id]);
 +
-+	if (ph && bitmap_weight(ph->cmap, MAX_PALLOC_BINS) > 0)
++	if (ph && bitmap_weight(ph->cmap, MAX_PALLOC_BINS) > 0) {
 +		cmap = ph->cmap;
-+	else {
++	} else {
 +		cmap = allcmap;
 +	}
 +
@@ -744,7 +750,7 @@ index 2f19464db66e..18764504c92d 100644
  /*
   * Go through the free lists for the given migratetype and remove
   * the smallest available page from the freelists
-@@ -1566,6 +2133,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+@@ -1566,6 +2139,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
  	return NULL;
  }
  
@@ -752,7 +758,7 @@ index 2f19464db66e..18764504c92d 100644
  
  /*
   * This array describes the order lists are fallen back to when
-@@ -3053,7 +3621,14 @@ struct page *rmqueue(struct zone *preferred_zone,
+@@ -3053,7 +3627,14 @@ struct page *rmqueue(struct zone *preferred_zone,
  	 */
  	WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
  
@@ -767,7 +773,7 @@ index 2f19464db66e..18764504c92d 100644
  		page = rmqueue_pcplist(preferred_zone, zone, order,
  				       migratetype, alloc_flags);
  		if (likely(page))
-@@ -6747,6 +7322,11 @@ unsigned long __offline_isolated_pages(unsigned long start_pfn,
+@@ -6747,6 +7328,11 @@ unsigned long __offline_isolated_pages(unsigned long start_pfn,
  	offline_mem_sections(pfn, end_pfn);
  	zone = page_zone(pfn_to_page(pfn));
  	spin_lock_irqsave(&zone->lock, flags);
@@ -959,7 +965,7 @@ index 000000000000..8c31d9e2cb00
 +
 +#endif /* CONFIG_CGROUP_PALLOC */
 diff --git a/mm/vmstat.c b/mm/vmstat.c
-index e875f2a4915f..5056b6e90a1a 100644
+index e875f2a4915f..797c5e731ec9 100644
 --- a/mm/vmstat.c
 +++ b/mm/vmstat.c
 @@ -29,6 +29,15 @@
@@ -992,7 +998,7 @@ index e875f2a4915f..5056b6e90a1a 100644
 +	/* Order by memory type */
 +	for (mt = 0; mt < MIGRATE_TYPES; mt++) {
 +		seq_printf(m, "-%17s[%d]", "mt", mt);
-+		for (order = 0; order < MAX_ORDER; order++) {      
++		for (order = 0; order < MAX_ORDER; order++) {
 +			area = &(zone->free_area[order]);
 +			cnt  = 0;
 +
