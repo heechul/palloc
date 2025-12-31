@@ -153,7 +153,7 @@ index 2630cc30147e..65ac892a5783 100644
  		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
  		zone->free_area[order].nr_free = 0;
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 542d25f77be8..b5b1319ccda4 100644
+index 542d25f77be8..542917b155ee 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -52,6 +52,7 @@
@@ -420,7 +420,7 @@ index 542d25f77be8..b5b1319ccda4 100644
  #define MIN_PERCPU_PAGELIST_HIGH_FRACTION (8)
  
  #if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
-@@ -1573,6 +1823,331 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
+@@ -1573,6 +1823,330 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
  		clear_page_pfmemalloc(page);
  }
  
@@ -729,8 +729,7 @@ index 542d25f77be8..b5b1319ccda4 100644
 +			page = get_page_from_free_area(area, migratetype);
 +			if (!page)
 +				continue;
-+			del_page_from_free_list(page, zone, current_order, migratetype);
-+			expand(zone, page, order, current_order, migratetype);
++			page_del_and_expand(zone, page, order, current_order, migratetype);
 +			trace_mm_page_alloc_zone_locked(page, order, migratetype,
 +					pcp_allowed_order(order) &&
 +					migratetype < MIGRATE_PCPTYPES);
@@ -752,7 +751,7 @@ index 542d25f77be8..b5b1319ccda4 100644
  /*
   * Go through the free lists for the given migratetype and remove
   * the smallest available page from the freelists
-@@ -1603,6 +2178,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
+@@ -1603,6 +2177,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
  	return NULL;
  }
  
@@ -760,7 +759,7 @@ index 542d25f77be8..b5b1319ccda4 100644
  
  /*
   * This array describes the order lists are fallen back to when
-@@ -3073,7 +3649,14 @@ struct page *rmqueue(struct zone *preferred_zone,
+@@ -3073,7 +3648,14 @@ struct page *rmqueue(struct zone *preferred_zone,
  {
  	struct page *page;
  
@@ -775,7 +774,7 @@ index 542d25f77be8..b5b1319ccda4 100644
  		page = rmqueue_pcplist(preferred_zone, zone, order,
  				       migratetype, alloc_flags);
  		if (likely(page))
-@@ -6743,6 +7326,11 @@ unsigned long __offline_isolated_pages(unsigned long start_pfn,
+@@ -6743,6 +7325,11 @@ unsigned long __offline_isolated_pages(unsigned long start_pfn,
  	offline_mem_sections(pfn, end_pfn);
  	zone = page_zone(pfn_to_page(pfn));
  	spin_lock_irqsave(&zone->lock, flags);
