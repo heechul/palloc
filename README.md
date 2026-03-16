@@ -39,7 +39,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 	17 21
 	8 9 12 13 14 15
     # cat map.txt > /sys/kernel/debug/palloc/control
-	--> select (14 XOR 18), (15 XOR 19), (16 XOR 20), and (17 XOR 21) and (8 XOR 9 XOR 12 XOR 13 XOR 14 XOR 15) (total bins: 2^5 = 32)
+	--> select (14 ^ 18), (15 ^ 19), (16 ^ 20), and (17 ^ 21) and (8 ^ 9 ^ 12 ^ 13 ^ 14 ^ 15) (total bins: 2^5 = 32)
    ```      
 2. CGROUP partition setting
    ```
