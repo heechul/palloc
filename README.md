@@ -23,7 +23,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 1. Prepare a phsyical address to DRAM bank mapping file (e.g., `map.txt` outfrom from drama-pp)
    - Direct address maps (e.g., Raspberry Pi 4)
    ```
-    # cat map.txt
+    # cat > map.txt
     12
     13
     14
@@ -32,7 +32,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
    ```
    - XOR address maps (e.g., Intel Skylake) 
    ```
-	# cat map.txt
+	# cat > map.txt
 	14 18
 	15 19
 	16 20
@@ -43,14 +43,13 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
    ```      
 2. CGROUP partition setting
    ```
-    # echo "+palloc" > /sys/fs/cgroup/cgroup.subtree_control
-	# mkdir /sys/fs/cgroup/part1
-	# echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
-	# echo 0 > /sys/fs/cgroup/part1/cpuset.mems
-	# echo 0-3 > /sys/fs/cgroup/part1/palloc.bins
+    # cd /sys/fs/cgroup/palloc
+    # mkdir part1
+    # cd part1
+	# echo 0-3 > palloc.bins
 	--> bin 0,1,2,3 are assigned to part1 CGROUP.
-	# echo $$ > /sys/fs/cgroup/part1/tasks
-	--> from now on, all processes invoked from the shell use pages from the bins 0,1,2,3 only.
+	# echo $$ > tasks
+	--> when you enable PALLOC, all processes invoked from the shell use pages from the bins 0, 1, 2, or 3.  
    ```
 3. Enable PALLOC
    ```
