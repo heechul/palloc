@@ -20,7 +20,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 
 ## Usage
 
-1. Prepare a phsyical address to DRAM bank mapping file (e.g., `map.txt` outfrom from drama-pp)
+- Set phsyical address to DRAM bank mapping functions (`map.txt` output from [drama-pp](https://github.com/CSL-KU/drama-pp))
    - Direct address maps (e.g., Raspberry Pi 4)
    ```
     # cat > map.txt
@@ -41,7 +41,7 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
     # cat map.txt > /sys/kernel/debug/palloc/control
 	--> select (14 ^ 18), (15 ^ 19), (16 ^ 20), and (17 ^ 21) and (8 ^ 9 ^ 12 ^ 13 ^ 14 ^ 15) (total bins: 2^5 = 32)
    ```      
-2. CGROUP partition setting
+- CGROUP partition setting
    ```
     # cd /sys/fs/cgroup/palloc
     # mkdir part1
@@ -51,16 +51,19 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 	# echo $$ > tasks
 	--> when you enable PALLOC, all processes invoked from the shell use pages from the bins 0, 1, 2, or 3.  
    ```
-3. Enable PALLOC
+- Enable PALLOC
    ```
 	# echo enable > /sys/kernel/debug/palloc/control
 	--> enable palloc (owise the default buddy allocator will be used)
+   ```
+- Other options
+   ```
 	# echo 1 > /sys/kernel/debug/palloc/debug_level  
-	--> enable debug messsages visible through /sys/kernel/debug/tracing/trace. [Recommended]
+	--> enable debug messsages visible through /sys/kernel/debug/tracing/trace.
 	# echo 4 > /sys/kernel/debug/palloc/alloc_balance
-	--> wait until at least 4 different colors are in the color cache. [Recommended]
+	--> wait until at least 4 different colors are in the color cache. 
 	# echo never > /sys/kernel/mm/transparent_hugepage/enabled
-	--> palloc doesn't work with transparent huge page. please disable this. [Recommended]
+	--> palloc doesn't work with transparent huge page. please disable this.
    ```
 	 
 ## Papers
