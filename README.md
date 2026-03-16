@@ -22,30 +22,26 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 
 ## Usage
 
-1. Prepare a phsyical address to DRAM bank mapping file (e.g., map.txt outfrom from drama-pp)
-   - Direct address maps (e.g., Raspberry Pi 4)
+1. Select physical adddress bits to be used for page coloring
+
+   - For normal address bits (e.g., Intel Nehalem)
    ```
-    # cat map.txt
-    12
-    13
-    14
-	# cat map.txt > /sys/kernel/debug/palloc/control
-    --> select bit 12, 13, 14. (total banks: 2^3 = 8)
+	# echo 0x00183000 > /sys/kernel/debug/palloc/palloc_mask
+        --> select bit 12, 13, 19, 20. (total bins: 2^4 = 16)
    ```
-   - XOR address maps (e.g., Intel Skylake) 
+   - For XOR mapped address bits (e.g., Intel Haswell) 
    ```
-	# cat map.txt
-	14 18
-	15 19
-	16 20
-	17 21
-	8 9 12 13 14 15
-    # cat map.txt > /sys/kernel/debug/palloc/control
-	--> select (14 XOR 18), (15 XOR 19), (16 XOR 20), and (17 XOR 21) and (8 XOR 9 XOR 12 XOR 13 XOR 14 XOR 15) (total bins: 2^5 = 32)
+	# echo 0x0001e000 > /sys/kernel/debug/palloc/palloc_mask
+	# echo xor 13 17 > /sys/kernel/debug/palloc/control
+	# echo xor 14 18 > /sys/kernel/debug/palloc/control
+	# echo xor 15 19 > /sys/kernel/debug/palloc/control
+	# echo xor 16 20 > /sys/kernel/debug/palloc/control
+	# echo 1 > /sys/kernel/debug/palloc/use_mc_xor
+	--> select (13 XOR 17), (14 XOR 18), (15 XOR 19), and (16 XOR 20) (total bins: 2^4 = 16)
    ```      
-2. CGROUP partition setting
+   - CGROUP partition setting
    ```
-    # echo "+palloc" > /sys/fs/cgroup/cgroup.subtree_control
+	# mount -t cgroup xxx /sys/fs/cgroup
 	# mkdir /sys/fs/cgroup/part1
 	# echo 0 > /sys/fs/cgroup/part1/cpuset.cpus
 	# echo 0 > /sys/fs/cgroup/part1/cpuset.mems
@@ -54,16 +50,22 @@ For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 	# echo $$ > /sys/fs/cgroup/part1/tasks
 	--> from now on, all processes invoked from the shell use pages from the bins 0,1,2,3 only.
    ```
-3. Enable PALLOC
+   - Enable PALLOC
    ```
 	# echo 1 > /sys/kernel/debug/palloc/use_palloc
 	--> enable palloc (owise the default buddy allocator will be used)
+   ```
+   - Other options
+   ```
 	# echo 1 > /sys/kernel/debug/palloc/debug_level  
 	--> enable debug messsages visible through /sys/kernel/debug/tracing/trace. [Recommended]
 	# echo 4 > /sys/kernel/debug/palloc/alloc_balance
-	--> wait until at least 4 different colors are in the color cache. [Recommended]
+	 --> wait until at least 4 different colors are in the color cache. [Recommended]
+   ```
+2. Disable support for transparent huge pages from kernel:
+   ```
 	# echo never > /sys/kernel/mm/transparent_hugepage/enabled
-	--> palloc doesn't work with transparent huge page. please disable this. [Recommended]
+	--> palloc doesn't work with transparent huge page. please disable this.
    ```
 	 
 ## Papers
