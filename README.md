@@ -14,7 +14,7 @@ To build the kernel with PALLOC enabled, the following option must be enabled.
 
 ## Detecting DRAM bank bits (for DRAM bank partitioning)
 
-See [README-map-detector.md](./README-map-detector.md)
+See [drama-pp](https://github.com/CSL-KU/drama-pp))
 
 For cache partitioning, just use the cache set bits instead of DRAM bank bits.
 
